@@ -81,7 +81,7 @@ class MultiSampleAnalysis:
     def denoise(self, method: str = "butterworth_filtfilt", **kwargs: Any) -> "MultiSampleAnalysis":
         if not self.traces:
             self.load()
-        self.preprocess_state = {"method": method, "kwargs": kwargs}
+        self.preprocess_state = {"method": method, **kwargs}
         self.denoised = {sid: preprocess_signal(tr.current, method=method, **kwargs) for sid, tr in self.traces.items()}
         return self
 
@@ -211,6 +211,14 @@ class MultiSampleAnalysis:
                 right_base = float(np.mean(right)) if len(right) else float(base[e.end_idx - 1])
                 global_base = float(np.median(base))
                 blockade_ratio = float(e.delta_i / (abs(global_base) + 1e-12))
+                seg_mean = float(np.mean(seg))
+                seg_std = float(np.std(seg))
+                centered = seg - seg_mean
+                denom = float(np.std(seg)) + 1e-12
+                skew = float(np.mean((centered / denom) ** 3))
+                kurt = float(np.mean((centered / denom) ** 4))
+                rms = float(np.sqrt(np.mean(seg ** 2))) + 1e-12
+                peak_factor = float(np.max(np.abs(seg)) / rms)
                 row = {
                     "trace_id": sid,
                     "sample_id": source_sample_id,
@@ -228,10 +236,13 @@ class MultiSampleAnalysis:
                     "right_baseline": right_base,
                     "global_baseline": global_base,
                     "blockade_ratio": blockade_ratio,
-                    "segment_mean": float(np.mean(seg)),
-                    "segment_std": float(np.std(seg)),
+                    "segment_mean": seg_mean,
+                    "segment_std": seg_std,
                     "segment_min": float(np.min(seg)),
                     "segment_max": float(np.max(seg)),
+                    "segment_skew": skew,
+                    "segment_kurt": kurt,
+                    "peak_factor": peak_factor,
                 }
                 for name, fn in custom_feature_fns.items():
                     feats = fn(seg)
@@ -334,7 +345,12 @@ class MultiSampleAnalysis:
             reader=reader or self.reader,
             reader_kwargs=reader_kwargs or self.reader_kwargs,
         )
-        other.load().denoise(**self.preprocess_state).detect_events(**self.detect_state)
+        preprocess_kwargs = self.preprocess_state.copy()
+        if "kwargs" in preprocess_kwargs and isinstance(preprocess_kwargs["kwargs"], dict):
+            nested = preprocess_kwargs.pop("kwargs")
+            preprocess_kwargs.update(nested)
+
+        other.load().denoise(**preprocess_kwargs).detect_events(**self.detect_state)
         features = other.extract_features()
 
         X = features[self.best_model_package["feature_cols"]].fillna(0.0)

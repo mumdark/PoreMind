@@ -41,7 +41,7 @@ analysis.detect_events(detect_method="threshold")  # 可选: threshold / zscore_
 # 绘图模块（pl）：默认显示 0-1 ms
 analysis.pl.current(sample_id=None, current="denoise", start_ms=0.0, end_ms=1.0, width=10, height=3)
 
-features = analysis.extract_features()
+features = analysis.extract_features()  # 含 segment_skew / segment_kurt / peak_factor 等特征
 filtered = analysis.filter_events(method="isolation_forest", contamination=0.05)
 best_pkg = analysis.build_best_model(cv=10)
 pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="abf")

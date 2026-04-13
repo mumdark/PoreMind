@@ -12,6 +12,13 @@ def events_to_dataframe(events: Iterable[Event], time: np.ndarray, signal: np.nd
     rows = []
     for idx, e in enumerate(events):
         segment = signal[e.start_idx:e.end_idx]
+        seg_mean = float(np.mean(segment))
+        seg_std = float(np.std(segment))
+        centered = segment - seg_mean
+        denom = seg_std + 1e-12
+        seg_skew = float(np.mean((centered / denom) ** 3))
+        seg_kurt = float(np.mean((centered / denom) ** 4))
+        peak_factor = float(np.max(np.abs(segment)) / (float(np.sqrt(np.mean(segment ** 2))) + 1e-12))
         rows.append(
             {
                 "event_id": idx,
@@ -23,8 +30,11 @@ def events_to_dataframe(events: Iterable[Event], time: np.ndarray, signal: np.nd
                 "baseline_local": e.baseline_local,
                 "delta_i": e.delta_i,
                 "snr": e.snr,
-                "segment_mean": float(np.mean(segment)),
-                "segment_std": float(np.std(segment)),
+                "segment_mean": seg_mean,
+                "segment_std": seg_std,
+                "segment_skew": seg_skew,
+                "segment_kurt": seg_kurt,
+                "peak_factor": peak_factor,
                 "segment_min": float(np.min(segment)),
             }
         )
