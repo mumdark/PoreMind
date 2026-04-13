@@ -115,3 +115,145 @@ class PlotAccessor:
         ax.tick_params(axis="x", rotation=35)
         plt.tight_layout()
         return ax
+
+    def _pick_df(self, data: str = "filtered"):
+        if data == "filtered":
+            if self.analysis.filtered_df is not None:
+                return self.analysis.filtered_df
+            if self.analysis.feature_df is not None:
+                return self.analysis.feature_df
+            return self.analysis.extract_features()
+        if data == "full":
+            if self.analysis.feature_df is not None:
+                return self.analysis.feature_df
+            return self.analysis.extract_features()
+        raise ValueError("data must be 'filtered' or 'full'")
+
+    @staticmethod
+    def _maybe_log2(v: np.ndarray, enabled: bool) -> np.ndarray:
+        if not enabled:
+            return v
+        return np.log2(np.abs(v) + 1e-12)
+
+    def plot_2d(
+        self,
+        x: str = "blockade_ratio",
+        y: str = "duration_s",
+        xlim: tuple[float, float] | None = None,
+        ylim: tuple[float, float] | None = None,
+        x_log2: bool = False,
+        y_log2: bool = True,
+        data: str = "filtered",
+        value: str | None = None,
+        width: float = 6.0,
+        height: float = 4.5,
+    ):
+        df = self._pick_df(data=data).copy()
+        if x not in df.columns or y not in df.columns:
+            raise ValueError("x/y column not found in dataframe")
+
+        xv = self._maybe_log2(df[x].to_numpy(dtype=float), x_log2)
+        yv = self._maybe_log2(df[y].to_numpy(dtype=float), y_log2)
+
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("analysis.pl.plot_2d requires matplotlib") from exc
+
+        fig, ax = plt.subplots(figsize=(width, height))
+        if value is None or value not in df.columns:
+            ax.scatter(xv, yv, s=6, alpha=0.55)
+        else:
+            col = df[value]
+            if col.dtype.kind in "biufc" and col.nunique() > 12:
+                sc = ax.scatter(xv, yv, c=col.to_numpy(dtype=float), cmap="viridis", s=6, alpha=0.6)
+                fig.colorbar(sc, ax=ax, label=value)
+            else:
+                cats = col.astype(str)
+                uniq = sorted(cats.unique())
+                cmap = plt.get_cmap("tab20", len(uniq))
+                for i, u in enumerate(uniq):
+                    m = cats == u
+                    ax.scatter(xv[m], yv[m], s=6, alpha=0.6, color=cmap(i), label=u)
+                ax.legend(markerscale=3, fontsize=8, loc="best")
+
+        ax.set_xlabel(f"{x}{' (log2)' if x_log2 else ''}")
+        ax.set_ylabel(f"{y}{' (log2)' if y_log2 else ''}")
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        ax.set_title("2D feature scatter")
+        plt.tight_layout()
+        return ax
+
+    def plot_3d(
+        self,
+        x: str = "blockade_ratio",
+        y: str = "duration_s",
+        z: str = "segment_std",
+        xlim: tuple[float, float] | None = None,
+        ylim: tuple[float, float] | None = None,
+        zlim: tuple[float, float] | None = None,
+        x_log2: bool = False,
+        y_log2: bool = True,
+        z_log2: bool = False,
+        data: str = "filtered",
+        value: str | None = None,
+        width: float = 7.0,
+        height: float = 5.0,
+    ):
+        df = self._pick_df(data=data).copy()
+        for c in (x, y, z):
+            if c not in df.columns:
+                raise ValueError(f"column not found: {c}")
+
+        xv = self._maybe_log2(df[x].to_numpy(dtype=float), x_log2)
+        yv = self._maybe_log2(df[y].to_numpy(dtype=float), y_log2)
+        zv = self._maybe_log2(df[z].to_numpy(dtype=float), z_log2)
+
+        try:
+            import matplotlib.pyplot as plt
+            from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("analysis.pl.plot_3d requires matplotlib") from exc
+
+        fig = plt.figure(figsize=(width, height))
+        ax = fig.add_subplot(111, projection="3d")
+
+        if value is None or value not in df.columns:
+            ax.scatter(xv, yv, zv, s=6, alpha=0.55)
+        else:
+            col = df[value]
+            if col.dtype.kind in "biufc" and col.nunique() > 12:
+                sc = ax.scatter(xv, yv, zv, c=col.to_numpy(dtype=float), cmap="viridis", s=6, alpha=0.6)
+                fig.colorbar(sc, ax=ax, pad=0.1, label=value)
+            else:
+                cats = col.astype(str)
+                uniq = sorted(cats.unique())
+                cmap = plt.get_cmap("tab20", len(uniq))
+                for i, u in enumerate(uniq):
+                    m = cats == u
+                    ax.scatter(xv[m], yv[m], zv[m], s=6, alpha=0.6, color=cmap(i), label=u)
+                ax.legend(markerscale=3, fontsize=8, loc="best")
+
+        ax.set_xlabel(f"{x}{' (log2)' if x_log2 else ''}")
+        ax.set_ylabel(f"{y}{' (log2)' if y_log2 else ''}")
+        ax.set_zlabel(f"{z}{' (log2)' if z_log2 else ''}")
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        if zlim is not None:
+            ax.set_zlim(*zlim)
+        ax.set_title("3D feature scatter")
+        plt.tight_layout()
+        return ax
+
+    def __getattr__(self, name: str):
+        # compatibility aliases requested in notebooks/discussions
+        if name == "2d_plot":
+            return self.plot_2d
+        if name == "3d_plot":
+            return self.plot_3d
+        raise AttributeError(name)

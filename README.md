@@ -46,6 +46,8 @@ filtered = analysis.filter_events()  # 默认 blockade_gmm(基于 blockade_ratio
 best_pkg = analysis.build_best_model(cv=10, scoring="accuracy")
 analysis.pl.model_cm(model_name=best_pkg["best_model"], split="test")
 analysis.pl.model_metric_bar(metric="accuracy", split="test")
+analysis.pl.plot_2d(data="filtered", value="label")
+analysis.pl.plot_3d(data="filtered", value="label")
 pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="abf")
 ```
 
@@ -53,5 +55,6 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 > 默认降噪方法为 `butterworth_filtfilt`（零相位滤波，不引入相位延迟），需安装 `scipy`。
 > 事件检测支持 `threshold`、`zscore_threshold`、`cusum`、`pelt`、`hmm`，并提供默认参数。
 > 默认建模候选包含 RF / LR / SVM / MLP / ElasticNet / Lasso / 决策树 / LDA / AdaBoost / 高斯朴素贝叶斯。
+> 提供 `analysis.pl.plot_2d` / `analysis.pl.plot_3d`（并兼容 `getattr(analysis.pl, "2d_plot")` / `getattr(analysis.pl, "3d_plot")`）进行2D/3D特征可视化。
 
 完整逐步 notebook：`notebooks/step_by_step_analysis.ipynb`

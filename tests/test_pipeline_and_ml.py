@@ -60,6 +60,8 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     try:
         _ = analysis.pl.model_metric_bar(metric="accuracy", split="test")
         _ = analysis.pl.model_cm(model_name=pkg["best_model"], split="test")
+        _ = analysis.pl.plot_2d(data="filtered", value="label")
+        _ = analysis.pl.plot_3d(data="filtered", value="label")
     except ImportError:
         pass
 
