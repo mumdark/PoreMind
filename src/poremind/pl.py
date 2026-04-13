@@ -55,6 +55,125 @@ class PlotAccessor:
         plt.tight_layout()
         return ax
 
+    def _resolve_signal(self, sample_id: str, current: str) -> tuple[np.ndarray, np.ndarray]:
+        trace = self.analysis.traces[sample_id]
+        if current == "denoise":
+            if not self.analysis.denoised:
+                self.analysis.denoise()
+            y = self.analysis.denoised[sample_id]
+        elif current == "raw":
+            y = trace.current
+        else:
+            raise ValueError("current must be 'denoise' or 'raw'")
+        return trace.time * 1000.0, y
+
+    @staticmethod
+    def _slice_events(events: list, start_event: int, end_event: int):
+        if start_event < 1 or end_event < start_event:
+            raise ValueError("start_event must be >=1 and end_event must be >= start_event")
+        start_i = start_event - 1
+        end_i = min(end_event, len(events))
+        return events[start_i:end_i]
+
+    def _event_current_core(
+        self,
+        events_map: dict[str, list],
+        sample_id: str | None,
+        current: str,
+        start_event: int,
+        end_event: int,
+        start_ms: float,
+        end_ms: float,
+        width: float,
+        height: float,
+        title_prefix: str,
+    ):
+        if not self.analysis.traces:
+            self.analysis.load()
+        if sample_id is None:
+            sample_id = next(iter(self.analysis.traces))
+        if sample_id not in events_map:
+            raise ValueError(f"sample_id {sample_id} has no detected events")
+
+        t_ms, y = self._resolve_signal(sample_id, current)
+        selected_events = self._slice_events(events_map[sample_id], start_event=start_event, end_event=end_event)
+
+        if selected_events:
+            event_start_ms = float(t_ms[selected_events[0].start_idx])
+            event_end_ms = float(t_ms[selected_events[-1].end_idx - 1])
+            win_start_ms, win_end_ms = event_start_ms, event_end_ms
+        else:
+            win_start_ms, win_end_ms = start_ms, end_ms
+        mask = (t_ms >= win_start_ms) & (t_ms <= win_end_ms)
+
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("event_current visualization requires matplotlib") from exc
+
+        fig, ax = plt.subplots(figsize=(width, height))
+        ax.plot(t_ms[mask], y[mask], lw=0.8)
+        for e in selected_events:
+            ax.axvline(float(t_ms[e.start_idx]), color="red", linestyle="--", linewidth=1.0)
+            ax.axvline(float(t_ms[e.end_idx - 1]), color="red", linestyle="--", linewidth=1.0)
+        ax.set_xlabel("Time (ms)")
+        ax.set_ylabel("Current")
+        ax.set_title(f"{title_prefix} | {sample_id} | {current} | event {start_event}-{end_event}")
+        plt.tight_layout()
+        return ax
+
+    def event_current_simple(
+        self,
+        sample_id: str | None = None,
+        current: str = "denoise",
+        start_event: int = 1,
+        end_event: int = 5,
+        start_ms: float = 0.0,
+        end_ms: float = 1.0,
+        width: float = 10.0,
+        height: float = 3.0,
+    ):
+        if not self.analysis.simple_events:
+            self.analysis.detect_events_simple(sample_id=sample_id, current=current)
+        return self._event_current_core(
+            self.analysis.simple_events,
+            sample_id=sample_id,
+            current=current,
+            start_event=start_event,
+            end_event=end_event,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            width=width,
+            height=height,
+            title_prefix="Simple events",
+        )
+
+    def event_current(
+        self,
+        sample_id: str | None = None,
+        current: str = "denoise",
+        start_event: int = 1,
+        end_event: int = 5,
+        start_ms: float = 0.0,
+        end_ms: float = 1.0,
+        width: float = 10.0,
+        height: float = 3.0,
+    ):
+        if not self.analysis.events:
+            self.analysis.detect_events()
+        return self._event_current_core(
+            self.analysis.events,
+            sample_id=sample_id,
+            current=current,
+            start_event=start_event,
+            end_event=end_event,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            width=width,
+            height=height,
+            title_prefix="Detected events",
+        )
+
     def model_cm(self, model_name: str, split: str = "test", width: float = 5.5, height: float = 4.5):
         """Visualize aggregated 10-fold confusion matrix for train or test split."""
         if split not in {"train", "test"}:
