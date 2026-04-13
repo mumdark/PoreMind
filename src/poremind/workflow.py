@@ -48,6 +48,7 @@ class MultiSampleAnalysis:
     baselines: dict[str, np.ndarray] = field(default_factory=dict)
     events: dict[str, list[Event]] = field(default_factory=dict)
     simple_events: dict[str, list[Event]] = field(default_factory=dict)
+    detect_events_simple_object: dict[str, list[Event]] = field(default_factory=dict)
     feature_df: pd.DataFrame | None = None
     filtered_df: pd.DataFrame | None = None
     best_model_package: dict[str, Any] | None = None
@@ -226,6 +227,7 @@ class MultiSampleAnalysis:
                 for e in evts_local
             ]
         self.simple_events = out
+        self.detect_events_simple_object = out
         return out
 
     @staticmethod

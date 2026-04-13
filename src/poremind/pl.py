@@ -133,10 +133,10 @@ class PlotAccessor:
         width: float = 10.0,
         height: float = 3.0,
     ):
-        if not self.analysis.simple_events:
+        if not self.analysis.detect_events_simple_object:
             self.analysis.detect_events_simple(sample_id=sample_id, current=current)
         return self._event_current_core(
-            self.analysis.simple_events,
+            self.analysis.detect_events_simple_object,
             sample_id=sample_id,
             current=current,
             start_event=start_event,

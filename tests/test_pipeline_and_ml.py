@@ -63,6 +63,7 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         detect_params={"sigma_k": 3.0, "min_duration_s": 0.001},
     )
     assert "A1" in simple_events
+    assert analysis.detect_events_simple_object == simple_events
 
     pkg = analysis.build_best_model(cv=2, scoring="accuracy")
     assert "best_model" in pkg
