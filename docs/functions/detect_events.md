@@ -15,3 +15,6 @@ For fast local tuning on a bounded time window, see `detect_events_simple`.
 
 ## Returns
 - `Self (MultiSampleAnalysis).`
+
+## Notes
+- Displays per-sample progress with a progress bar when `tqdm` is available.

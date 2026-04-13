@@ -77,6 +77,7 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 > 默认 `min_duration_s=0`；`rolling_quantile` 默认参数为 `window=10000, q=0.5`。
 > 提供 `detect_events_simple` 便于在局部时间窗口做初步方法选择与参数调整。
 > `detect_events_simple` 的结果会保存到 `analysis.detect_events_simple_object`（并兼容 `analysis.simple_events`）。
+> `detect_events` / `detect_events_simple` 会按样本显示进度条（若环境安装了 `tqdm`）。
 > 默认建模候选包含 RF / LR / SVM / MLP / ElasticNet / Lasso / 决策树 / LDA / AdaBoost / 高斯朴素贝叶斯。
 > 提供 `analysis.plot` 作为 `analysis.pl` 的别名；并支持 `analysis.plot.event_current_simple` / `analysis.plot.event_current` 对事件范围进行电流可视化（红色虚线标注事件起止）。
 > 同时支持 `analysis.pl.plot_2d` / `analysis.pl.plot_3d`（并兼容 `getattr(analysis.pl, "2d_plot")` / `getattr(analysis.pl, "3d_plot")`）进行2D/3D特征可视化。

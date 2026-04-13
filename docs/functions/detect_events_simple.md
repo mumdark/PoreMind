@@ -22,3 +22,4 @@ Run event detection only on a selected time window for quick method selection an
 ## Side effects
 - Writes results to `analysis.detect_events_simple_object` (primary store for plotting with `event_current_simple`).
 - Also keeps backward-compatible mirror in `analysis.simple_events`.
+- Displays per-sample progress with a progress bar when `tqdm` is available.

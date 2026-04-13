@@ -150,7 +150,18 @@ class MultiSampleAnalysis:
 
         self.baselines = {}
         self.events = {}
-        for sid, tr in self.traces.items():
+        trace_items = list(self.traces.items())
+        iterator = trace_items
+        try:
+            from tqdm.auto import tqdm  # type: ignore
+
+            iterator = tqdm(trace_items, desc="detect_events", unit="sample")
+        except Exception:
+            iterator = trace_items
+
+        for sid, tr in iterator:
+            if hasattr(iterator, "set_postfix_str"):
+                iterator.set_postfix_str(str(sid))
             sig = self.denoised[sid]
             baseline = self._estimate_baseline(sig, method=baseline_method, baseline_params=baseline_params)
             self.baselines[sid] = baseline
@@ -333,7 +344,17 @@ class MultiSampleAnalysis:
 
         target_ids = [sample_id] if sample_id is not None else list(self.traces.keys())
         out: dict[str, list[Event]] = {}
-        for sid in target_ids:
+        iterator = target_ids
+        try:
+            from tqdm.auto import tqdm  # type: ignore
+
+            iterator = tqdm(target_ids, desc="detect_events_simple", unit="sample")
+        except Exception:
+            iterator = target_ids
+
+        for sid in iterator:
+            if hasattr(iterator, "set_postfix_str"):
+                iterator.set_postfix_str(str(sid))
             tr = self.traces[sid]
             sig_full = self.denoised[sid] if current == "denoise" else tr.current
             t_ms = tr.time * 1000.0
