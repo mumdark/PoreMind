@@ -64,6 +64,16 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     )
     assert "A1" in simple_events
     assert analysis.detect_events_simple_object == simple_events
+    _ = analysis.detect_events_simple(
+        sample_id="A1",
+        current="raw",
+        start_ms=0.0,
+        end_ms=300.0,
+        detect_method="threshold",
+        detect_direction="up",
+        baseline_method="global_baseline",
+        baseline_params={"baseline": 0.0},
+    )
 
     pkg = analysis.build_best_model(cv=2, scoring="accuracy")
     assert "best_model" in pkg
