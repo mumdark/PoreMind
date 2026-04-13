@@ -16,7 +16,13 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 from .baseline import estimate_baseline
-from .events import Event, detect_events_threshold
+from .events import (
+    Event,
+    detect_events_cusum,
+    detect_events_hmm,
+    detect_events_pelt,
+    detect_events_threshold,
+)
 from .features import select_feature_columns
 from .io import Trace, read_abf, read_abf_all, read_csv
 from .pl import PlotAccessor
@@ -115,7 +121,8 @@ class MultiSampleAnalysis:
     ) -> "MultiSampleAnalysis":
         if not self.denoised:
             self.denoise()
-        detect_params = detect_params or {"sigma_k": 5.0, "min_duration_s": 2e-4}
+        if detect_params is None:
+            detect_params = self._default_detect_params(detect_method)
         baseline_params = baseline_params or {"window": 501, "q": 0.5}
         self.detect_state = {
             "detect_method": detect_method,
@@ -137,10 +144,29 @@ class MultiSampleAnalysis:
                 thr = -float(detect_params.get("z", 4.0))
                 mask = z < thr
                 evts = self._mask_to_events(mask, baseline, sig, tr.sampling_rate_hz, min_duration_s=float(detect_params.get("min_duration_s", 2e-4)))
+            elif detect_method == "cusum":
+                evts = detect_events_cusum(sig, baseline, tr.sampling_rate_hz, **detect_params)
+            elif detect_method == "pelt":
+                evts = detect_events_pelt(sig, baseline, tr.sampling_rate_hz, **detect_params)
+            elif detect_method == "hmm":
+                evts = detect_events_hmm(sig, baseline, tr.sampling_rate_hz, **detect_params)
             else:
                 raise ValueError("unsupported detect method")
             self.events[sid] = evts
         return self
+
+    @staticmethod
+    def _default_detect_params(detect_method: str) -> dict[str, Any]:
+        defaults = {
+            "threshold": {"sigma_k": 5.0, "min_duration_s": 2e-4},
+            "zscore_threshold": {"z": 4.0, "min_duration_s": 2e-4},
+            "cusum": {"drift": 0.02, "threshold": 8.0, "min_duration_s": 2e-4},
+            "pelt": {"model": "l2", "penalty": 8.0, "sigma_k": 3.0, "min_duration_s": 2e-4},
+            "hmm": {"n_components": 2, "covariance_type": "diag", "n_iter": 200, "min_duration_s": 2e-4},
+        }
+        if detect_method not in defaults:
+            raise ValueError(f"unsupported detect method: {detect_method}")
+        return defaults[detect_method].copy()
 
     @staticmethod
     def _mask_to_events(mask: np.ndarray, baseline: np.ndarray, signal: np.ndarray, sr: float, min_duration_s: float) -> list[Event]:

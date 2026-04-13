@@ -37,6 +37,9 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     preview = analysis.preview_signal("A1", start_s=0.0, end_s=0.2)
     assert not preview.empty
 
+    defaults = analysis._default_detect_params("cusum")
+    assert {"drift", "threshold", "min_duration_s"}.issubset(defaults.keys())
+
     analysis.detect_events(
         detect_method="threshold",
         detect_params={"sigma_k": 3.5, "min_duration_s": 0.001},

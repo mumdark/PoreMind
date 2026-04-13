@@ -13,6 +13,8 @@ dependencies = [
   "scikit-learn",
   "scipy",
   "matplotlib",
+  "ruptures",
+  "hmmlearn",
 ]
 
 [tool.setuptools.packages.find]

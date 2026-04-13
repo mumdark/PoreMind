@@ -36,7 +36,7 @@ analysis = create_analysis_object(
 ).load()
 
 analysis.denoise()  # 默认 butterworth_filtfilt
-analysis.detect_events(detect_method="threshold")
+analysis.detect_events(detect_method="threshold")  # 可选: threshold / zscore_threshold / cusum / pelt / hmm
 
 # 绘图模块（pl）：默认显示 0-1 ms
 analysis.pl.current(sample_id=None, current="denoise", start_ms=0.0, end_ms=1.0, width=10, height=3)
@@ -49,5 +49,6 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 
 > 说明：ABF 模式默认会遍历该文件全部 channel 与 sweep，并在事件表中输出 `channel`、`sweep` 列。
 > 默认降噪方法为 `butterworth_filtfilt`（零相位滤波，不引入相位延迟），需安装 `scipy`。
+> 事件检测支持 `threshold`、`zscore_threshold`、`cusum`、`pelt`、`hmm`，并提供默认参数。
 
 完整逐步 notebook：`notebooks/step_by_step_analysis.ipynb`
