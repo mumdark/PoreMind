@@ -41,16 +41,8 @@ analysis = create_analysis_object(
 analysis.denoise()  # 默认 butterworth_filtfilt
 analysis.detect_events(detect_method="threshold")  # 可选: threshold / zscore_threshold / cusum / pelt / hmm
 # 可选方向：detect_direction="down"（默认）或 "up"
-# 可选基线：baseline_method="global_baseline", baseline_params={"baseline": 0.0}
-
-# 仅在局部时间窗口快速调参（默认 0-1000 ms）
-simple_events = analysis.detect_events_simple(
-    sample_id=None,
-    current="denoise",
-    start_ms=0.0,
-    end_ms=1000.0,
-    detect_method="threshold",
-)
+# 可选基线：baseline_method="global_quantile", baseline_params={"q": 0.5}
+# 可选事件合并：merge_event=True, merge_event_params={"merge_gap_ms": 0.2}
 
 # 仅在局部时间窗口快速调参（默认 0-1000 ms）
 simple_events = analysis.detect_events_simple(
@@ -80,7 +72,8 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 > 默认降噪方法为 `butterworth_filtfilt`（零相位滤波，不引入相位延迟），需安装 `scipy`。
 > 事件检测支持 `threshold`、`zscore_threshold`、`cusum`、`pelt`、`hmm`，并提供默认参数。
 > 事件方向支持 `detect_direction="down"`（向下事件，默认）或 `detect_direction="up"`（向上事件）。
-> 基线支持 `baseline_method="global_baseline"`，并通过 `baseline_params={"baseline": xx}` 直接指定全局基线。
+> 基线支持 `baseline_method="global_quantile"`，并通过 `baseline_params={"q": xx}` 指定全局分位数（默认 `q=0.5`，即全局中位值）。
+> 支持事件合并：`merge_event=True` + `merge_event_params={"merge_gap_ms": xx}` 可合并时间间隔不超过 `xx` ms 的临近事件。
 > 默认 `min_duration_s=0`；`rolling_quantile` 默认参数为 `window=10000, q=0.5`。
 > 提供 `detect_events_simple` 便于在局部时间窗口做初步方法选择与参数调整。
 > `detect_events_simple` 的结果会保存到 `analysis.detect_events_simple_object`（并兼容 `analysis.simple_events`）。

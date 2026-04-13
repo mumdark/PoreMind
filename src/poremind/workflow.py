@@ -130,6 +130,8 @@ class MultiSampleAnalysis:
         baseline_method: str = "rolling_quantile",
         baseline_params: dict[str, Any] | None = None,
         detect_direction: str = "down",
+        merge_event: bool = False,
+        merge_event_params: dict[str, Any] | None = None,
     ) -> "MultiSampleAnalysis":
         if not self.denoised:
             self.denoise()
@@ -142,6 +144,8 @@ class MultiSampleAnalysis:
             "baseline_method": baseline_method,
             "baseline_params": baseline_params,
             "detect_direction": detect_direction,
+            "merge_event": merge_event,
+            "merge_event_params": merge_event_params or {"merge_gap_ms": 0.0},
         }
 
         self.baselines = {}
@@ -158,16 +162,58 @@ class MultiSampleAnalysis:
                 detect_params=detect_params,
                 detect_direction=detect_direction,
             )
+            if merge_event:
+                evts = self._merge_nearby_events(
+                    evts,
+                    signal=sig,
+                    baseline=baseline,
+                    sampling_rate_hz=tr.sampling_rate_hz,
+                    merge_gap_ms=float((merge_event_params or {"merge_gap_ms": 0.0}).get("merge_gap_ms", 0.0)),
+                )
             self.events[sid] = evts
         return self
 
     @staticmethod
     def _estimate_baseline(signal: np.ndarray, method: str, baseline_params: dict[str, Any]) -> np.ndarray:
-        if method == "global_baseline":
-            if "baseline" not in baseline_params:
-                raise ValueError("baseline_params must include 'baseline' when baseline_method='global_baseline'")
-            return np.full_like(signal, float(baseline_params["baseline"]), dtype=float)
+        if method == "global_quantile":
+            q = float(baseline_params.get("q", 0.5))
+            val = float(np.quantile(signal, q))
+            return np.full_like(signal, val, dtype=float)
         return estimate_baseline(signal, method=method, **baseline_params)
+
+    @staticmethod
+    def _merge_nearby_events(
+        events: list[Event],
+        signal: np.ndarray,
+        baseline: np.ndarray,
+        sampling_rate_hz: float,
+        merge_gap_ms: float,
+    ) -> list[Event]:
+        if len(events) <= 1:
+            return events
+        gap_samples = max(0, int((merge_gap_ms / 1000.0) * sampling_rate_hz))
+        merged: list[Event] = []
+        cur_start = events[0].start_idx
+        cur_end = events[0].end_idx
+        for e in events[1:]:
+            if e.start_idx - cur_end <= gap_samples:
+                cur_end = max(cur_end, e.end_idx)
+            else:
+                merged.append(MultiSampleAnalysis._build_event(cur_start, cur_end, signal, baseline, sampling_rate_hz))
+                cur_start, cur_end = e.start_idx, e.end_idx
+        merged.append(MultiSampleAnalysis._build_event(cur_start, cur_end, signal, baseline, sampling_rate_hz))
+        return merged
+
+    @staticmethod
+    def _build_event(start_idx: int, end_idx: int, signal: np.ndarray, baseline: np.ndarray, sr: float) -> Event:
+        seg_signal = signal[start_idx:end_idx]
+        seg_base = baseline[start_idx:end_idx]
+        delta_i = float(np.mean(seg_base - seg_signal))
+        baseline_local = float(np.mean(seg_base))
+        dwell = (end_idx - start_idx) / sr
+        sigma = float(np.std(signal - baseline)) + 1e-12
+        snr = delta_i / sigma
+        return Event(start_idx=start_idx, end_idx=end_idx, baseline_local=baseline_local, delta_i=delta_i, dwell_time_s=dwell, snr=snr)
 
     @staticmethod
     def _detect_events_by_method(
@@ -217,6 +263,8 @@ class MultiSampleAnalysis:
         start_ms: float = 0.0,
         end_ms: float = 1000.0,
         detect_direction: str = "down",
+        merge_event: bool = False,
+        merge_event_params: dict[str, Any] | None = None,
     ) -> dict[str, list[Event]]:
         if not self.traces:
             self.load()
@@ -238,6 +286,8 @@ class MultiSampleAnalysis:
             "start_ms": start_ms,
             "end_ms": end_ms,
             "detect_direction": detect_direction,
+            "merge_event": merge_event,
+            "merge_event_params": merge_event_params or {"merge_gap_ms": 0.0},
         }
 
         target_ids = [sample_id] if sample_id is not None else list(self.traces.keys())
@@ -261,6 +311,14 @@ class MultiSampleAnalysis:
                 detect_params=detect_params,
                 detect_direction=detect_direction,
             )
+            if merge_event:
+                evts_local = self._merge_nearby_events(
+                    evts_local,
+                    signal=sig,
+                    baseline=baseline,
+                    sampling_rate_hz=tr.sampling_rate_hz,
+                    merge_gap_ms=float((merge_event_params or {"merge_gap_ms": 0.0}).get("merge_gap_ms", 0.0)),
+                )
             out[sid] = [
                 Event(
                     start_idx=e.start_idx + lo,

@@ -71,8 +71,10 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         end_ms=300.0,
         detect_method="threshold",
         detect_direction="up",
-        baseline_method="global_baseline",
-        baseline_params={"baseline": 0.0},
+        baseline_method="global_quantile",
+        baseline_params={"q": 0.5},
+        merge_event=True,
+        merge_event_params={"merge_gap_ms": 0.2},
     )
 
     pkg = analysis.build_best_model(cv=2, scoring="accuracy")
