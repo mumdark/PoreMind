@@ -18,7 +18,7 @@ from sklearn.svm import SVC
 from .baseline import estimate_baseline
 from .events import Event, detect_events_threshold
 from .features import select_feature_columns
-from .io import Trace, read_abf, read_csv
+from .io import Trace, read_abf, read_abf_all, read_csv
 from .preprocess import preprocess_signal
 
 FeatureFn = Callable[[np.ndarray], dict[str, float]]
@@ -42,10 +42,28 @@ class MultiSampleAnalysis:
     preprocess_state: dict[str, Any] = field(default_factory=dict)
     detect_state: dict[str, Any] = field(default_factory=dict)
     feature_state: dict[str, Any] = field(default_factory=dict)
+    trace_to_sample: dict[str, str] = field(default_factory=dict)
 
     def load(self) -> "MultiSampleAnalysis":
-        reader_fn = read_abf if self.reader == "abf" else read_csv
-        self.traces = {sid: reader_fn(path, **self.reader_kwargs) for sid, path in self.sample_paths.items()}
+        self.traces = {}
+        self.trace_to_sample = {}
+        for sid, path in self.sample_paths.items():
+            if self.reader == "abf":
+                # 默认遍历 ABF 全部 channel + sweep
+                if self.reader_kwargs:
+                    trace = read_abf(path, **self.reader_kwargs)
+                    key = f"{sid}__ch{trace.channel}_sw{trace.sweep}"
+                    self.traces[key] = trace
+                    self.trace_to_sample[key] = sid
+                else:
+                    for trace in read_abf_all(path):
+                        key = f"{sid}__ch{trace.channel}_sw{trace.sweep}"
+                        self.traces[key] = trace
+                        self.trace_to_sample[key] = sid
+            else:
+                trace = read_csv(path, **self.reader_kwargs)
+                self.traces[sid] = trace
+                self.trace_to_sample[sid] = sid
         return self
 
     # Step 1: denoise + preview/visualize
@@ -151,6 +169,7 @@ class MultiSampleAnalysis:
 
         for sid, evts in self.events.items():
             tr = self.traces[sid]
+            source_sample_id = self.trace_to_sample.get(sid, sid)
             sig = self.denoised[sid]
             base = self.baselines[sid]
             for i, e in enumerate(evts):
@@ -162,7 +181,10 @@ class MultiSampleAnalysis:
                 global_base = float(np.median(base))
                 blockade_ratio = float(e.delta_i / (abs(global_base) + 1e-12))
                 row = {
-                    "sample_id": sid,
+                    "trace_id": sid,
+                    "sample_id": source_sample_id,
+                    "channel": tr.channel,
+                    "sweep": tr.sweep,
                     "event_id": i,
                     "start_idx": e.start_idx,
                     "end_idx": e.end_idx,
@@ -183,8 +205,8 @@ class MultiSampleAnalysis:
                 for name, fn in custom_feature_fns.items():
                     feats = fn(seg)
                     row.update({f"{name}_{k}": v for k, v in feats.items()})
-                if self.sample_to_group and sid in self.sample_to_group:
-                    row["label"] = self.sample_to_group[sid]
+                if self.sample_to_group and source_sample_id in self.sample_to_group:
+                    row["label"] = self.sample_to_group[source_sample_id]
                 rows.append(row)
 
         self.feature_state = {"custom_features": list(custom_feature_fns)}

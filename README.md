@@ -15,14 +15,14 @@
 pip install -e .
 ```
 
-## 快速用法（对象式）
+## 快速用法（ABF 输入）
 
 ```python
 from poremind import create_analysis_object
 
 sample_paths = {
-    "std_A_01": "std_A_01.csv",
-    "std_B_01": "std_B_01.csv",
+    "std_A_01": "std_A_01.abf",
+    "std_B_01": "std_B_01.abf",
 }
 sample_to_group = {
     "std_A_01": "A",
@@ -32,7 +32,7 @@ sample_to_group = {
 analysis = create_analysis_object(
     sample_paths,
     sample_to_group=sample_to_group,
-    reader="csv",
+    reader="abf",
 ).load()
 
 analysis.denoise(method="drift_corrected_moving_average", drift_window=1001, smooth_window=5)
@@ -40,7 +40,9 @@ analysis.detect_events(detect_method="threshold")
 features = analysis.extract_features()
 filtered = analysis.filter_events(method="isolation_forest", contamination=0.05)
 best_pkg = analysis.build_best_model(cv=10)
-pred = analysis.classify_new_samples({"unknown_01": "unknown_01.csv"}, reader="csv")
+pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="abf")
 ```
+
+> 说明：ABF 模式默认会遍历该文件全部 channel 与 sweep，并在事件表中输出 `channel`、`sweep` 列。
 
 完整逐步 notebook：`notebooks/step_by_step_analysis.ipynb`
