@@ -47,6 +47,7 @@ class MultiSampleAnalysis:
     denoised: dict[str, np.ndarray] = field(default_factory=dict)
     baselines: dict[str, np.ndarray] = field(default_factory=dict)
     events: dict[str, list[Event]] = field(default_factory=dict)
+    simple_events: dict[str, list[Event]] = field(default_factory=dict)
     feature_df: pd.DataFrame | None = None
     filtered_df: pd.DataFrame | None = None
     best_model_package: dict[str, Any] | None = None
@@ -54,12 +55,15 @@ class MultiSampleAnalysis:
 
     preprocess_state: dict[str, Any] = field(default_factory=dict)
     detect_state: dict[str, Any] = field(default_factory=dict)
+    simple_detect_state: dict[str, Any] = field(default_factory=dict)
     feature_state: dict[str, Any] = field(default_factory=dict)
     trace_to_sample: dict[str, str] = field(default_factory=dict)
     pl: PlotAccessor = field(init=False)
+    plot: PlotAccessor = field(init=False)
 
     def __post_init__(self) -> None:
         self.pl = PlotAccessor(self)
+        self.plot = self.pl
 
     def load(self) -> "MultiSampleAnalysis":
         self.traces = {}
@@ -143,23 +147,86 @@ class MultiSampleAnalysis:
             sig = self.denoised[sid]
             baseline = estimate_baseline(sig, method=baseline_method, **baseline_params)
             self.baselines[sid] = baseline
-            if detect_method == "threshold":
-                evts = detect_events_threshold(sig, baseline, tr.sampling_rate_hz, **detect_params)
-            elif detect_method == "zscore_threshold":
-                z = (sig - baseline) / (np.std(sig - baseline) + 1e-12)
-                thr = -float(detect_params.get("z", 4.0))
-                mask = z < thr
-                evts = self._mask_to_events(mask, baseline, sig, tr.sampling_rate_hz, min_duration_s=float(detect_params.get("min_duration_s", 2e-4)))
-            elif detect_method == "cusum":
-                evts = detect_events_cusum(sig, baseline, tr.sampling_rate_hz, **detect_params)
-            elif detect_method == "pelt":
-                evts = detect_events_pelt(sig, baseline, tr.sampling_rate_hz, **detect_params)
-            elif detect_method == "hmm":
-                evts = detect_events_hmm(sig, baseline, tr.sampling_rate_hz, **detect_params)
-            else:
-                raise ValueError("unsupported detect method")
+            evts = self._detect_events_by_method(sig, baseline, tr.sampling_rate_hz, detect_method=detect_method, detect_params=detect_params)
             self.events[sid] = evts
         return self
+
+    @staticmethod
+    def _detect_events_by_method(signal: np.ndarray, baseline: np.ndarray, sampling_rate_hz: float, detect_method: str, detect_params: dict[str, Any]) -> list[Event]:
+        if detect_method == "threshold":
+            return detect_events_threshold(signal, baseline, sampling_rate_hz, **detect_params)
+        if detect_method == "zscore_threshold":
+            z = (signal - baseline) / (np.std(signal - baseline) + 1e-12)
+            thr = -float(detect_params.get("z", 4.0))
+            mask = z < thr
+            return MultiSampleAnalysis._mask_to_events(mask, baseline, signal, sampling_rate_hz, min_duration_s=float(detect_params.get("min_duration_s", 2e-4)))
+        if detect_method == "cusum":
+            return detect_events_cusum(signal, baseline, sampling_rate_hz, **detect_params)
+        if detect_method == "pelt":
+            return detect_events_pelt(signal, baseline, sampling_rate_hz, **detect_params)
+        if detect_method == "hmm":
+            return detect_events_hmm(signal, baseline, sampling_rate_hz, **detect_params)
+        raise ValueError("unsupported detect method")
+
+    def detect_events_simple(
+        self,
+        detect_method: str = "threshold",
+        detect_params: dict[str, Any] | None = None,
+        baseline_method: str = "rolling_quantile",
+        baseline_params: dict[str, Any] | None = None,
+        sample_id: str | None = None,
+        current: str = "denoise",
+        start_ms: float = 0.0,
+        end_ms: float = 1000.0,
+    ) -> dict[str, list[Event]]:
+        if not self.traces:
+            self.load()
+        if current not in {"denoise", "raw"}:
+            raise ValueError("current must be 'denoise' or 'raw'")
+        if current == "denoise" and not self.denoised:
+            self.denoise()
+        if detect_params is None:
+            detect_params = self._default_detect_params(detect_method)
+        baseline_params = baseline_params or {"window": 501, "q": 0.5}
+
+        self.simple_detect_state = {
+            "detect_method": detect_method,
+            "detect_params": detect_params,
+            "baseline_method": baseline_method,
+            "baseline_params": baseline_params,
+            "sample_id": sample_id,
+            "current": current,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+        }
+
+        target_ids = [sample_id] if sample_id is not None else list(self.traces.keys())
+        out: dict[str, list[Event]] = {}
+        for sid in target_ids:
+            tr = self.traces[sid]
+            sig_full = self.denoised[sid] if current == "denoise" else tr.current
+            t_ms = tr.time * 1000.0
+            idx = np.flatnonzero((t_ms >= start_ms) & (t_ms <= end_ms))
+            if len(idx) == 0:
+                out[sid] = []
+                continue
+            lo, hi = int(idx[0]), int(idx[-1]) + 1
+            sig = sig_full[lo:hi]
+            baseline = estimate_baseline(sig, method=baseline_method, **baseline_params)
+            evts_local = self._detect_events_by_method(sig, baseline, tr.sampling_rate_hz, detect_method=detect_method, detect_params=detect_params)
+            out[sid] = [
+                Event(
+                    start_idx=e.start_idx + lo,
+                    end_idx=e.end_idx + lo,
+                    baseline_local=e.baseline_local,
+                    delta_i=e.delta_i,
+                    dwell_time_s=e.dwell_time_s,
+                    snr=e.snr,
+                )
+                for e in evts_local
+            ]
+        self.simple_events = out
+        return out
 
     @staticmethod
     def _default_detect_params(detect_method: str) -> dict[str, Any]:
