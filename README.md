@@ -35,8 +35,12 @@ analysis = create_analysis_object(
     reader="abf",
 ).load()
 
-analysis.denoise(method="drift_corrected_moving_average", drift_window=1001, smooth_window=5)
+analysis.denoise()  # 默认 butterworth_filtfilt
 analysis.detect_events(detect_method="threshold")
+
+# 绘图模块（pl）：默认显示 0-1 ms
+analysis.pl.current(sample_id=None, current="denoise", start_ms=0.0, end_ms=1.0, width=10, height=3)
+
 features = analysis.extract_features()
 filtered = analysis.filter_events(method="isolation_forest", contamination=0.05)
 best_pkg = analysis.build_best_model(cv=10)
@@ -44,5 +48,6 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 ```
 
 > 说明：ABF 模式默认会遍历该文件全部 channel 与 sweep，并在事件表中输出 `channel`、`sweep` 列。
+> 默认降噪方法为 `butterworth_filtfilt`（零相位滤波，不引入相位延迟），需安装 `scipy`。
 
 完整逐步 notebook：`notebooks/step_by_step_analysis.ipynb`

@@ -16,8 +16,8 @@ from .preprocess import preprocess_signal
 @dataclass
 class AnalysisConfig:
     reader: Literal["abf", "csv"] = "abf"
-    preprocess_method: str = "drift_corrected_moving_average"
-    preprocess_params: dict[str, Any] = field(default_factory=lambda: {"drift_window": 1001, "smooth_window": 5})
+    preprocess_method: str = "butterworth_filtfilt"
+    preprocess_params: dict[str, Any] = field(default_factory=lambda: {"filtfilt_N": 2, "filtfilt_Wn": 0.1})
     baseline_method: str = "rolling_quantile"
     baseline_params: dict[str, Any] = field(default_factory=lambda: {"window": 501, "q": 0.5})
     detect_params: dict[str, Any] = field(default_factory=lambda: {"sigma_k": 5.0, "min_duration_s": 2e-4})

@@ -19,6 +19,7 @@ from .baseline import estimate_baseline
 from .events import Event, detect_events_threshold
 from .features import select_feature_columns
 from .io import Trace, read_abf, read_abf_all, read_csv
+from .pl import PlotAccessor
 from .preprocess import preprocess_signal
 
 FeatureFn = Callable[[np.ndarray], dict[str, float]]
@@ -43,6 +44,10 @@ class MultiSampleAnalysis:
     detect_state: dict[str, Any] = field(default_factory=dict)
     feature_state: dict[str, Any] = field(default_factory=dict)
     trace_to_sample: dict[str, str] = field(default_factory=dict)
+    pl: PlotAccessor = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.pl = PlotAccessor(self)
 
     def load(self) -> "MultiSampleAnalysis":
         self.traces = {}
@@ -67,7 +72,7 @@ class MultiSampleAnalysis:
         return self
 
     # Step 1: denoise + preview/visualize
-    def denoise(self, method: str = "drift_corrected_moving_average", **kwargs: Any) -> "MultiSampleAnalysis":
+    def denoise(self, method: str = "butterworth_filtfilt", **kwargs: Any) -> "MultiSampleAnalysis":
         if not self.traces:
             self.load()
         self.preprocess_state = {"method": method, "kwargs": kwargs}

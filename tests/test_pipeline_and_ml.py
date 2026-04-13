@@ -32,6 +32,7 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         reader="csv",
     ).load()
 
+    assert hasattr(analysis, "pl")
     analysis.denoise(method="moving_average", window=5)
     preview = analysis.preview_signal("A1", start_s=0.0, end_s=0.2)
     assert not preview.empty
