@@ -52,6 +52,15 @@ simple_events = analysis.detect_events_simple(
     detect_method="threshold",
 )
 
+# 仅在局部时间窗口快速调参（默认 0-1000 ms）
+simple_events = analysis.detect_events_simple(
+    sample_id=None,
+    current="denoise",
+    start_ms=0.0,
+    end_ms=1000.0,
+    detect_method="threshold",
+)
+
 # 绘图模块（pl）：默认显示 0-1 ms
 analysis.pl.current(sample_id=None, current="denoise", start_ms=0.0, end_ms=1.0, width=10, height=3)
 analysis.plot.event_current_simple(sample_id=None, current="denoise", start_event=1, end_event=5)
