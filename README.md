@@ -42,7 +42,7 @@ analysis.detect_events(detect_method="threshold")  # 可选: threshold / zscore_
 analysis.pl.current(sample_id=None, current="denoise", start_ms=0.0, end_ms=1.0, width=10, height=3)
 
 features = analysis.extract_features()  # 含 segment_skew / segment_kurt / peak_factor 等特征
-filtered = analysis.filter_events(method="isolation_forest", contamination=0.05)
+filtered = analysis.filter_events()  # 默认 blockade_gmm(基于 blockade_ratio 单特征)
 best_pkg = analysis.build_best_model(cv=10, scoring="accuracy")
 analysis.pl.model_cm(model_name=best_pkg["best_model"], split="test")
 analysis.pl.model_metric_bar(metric="accuracy", split="test")

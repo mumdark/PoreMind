@@ -51,7 +51,7 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     assert len(feat_df) > 0
     assert {"left_baseline", "right_baseline", "blockade_ratio", "channel", "sweep", "sample_id", "segment_skew", "segment_kurt", "peak_factor"}.issubset(feat_df.columns)
 
-    filtered = analysis.filter_events(method="isolation_forest", contamination=0.1)
+    filtered = analysis.filter_events()
     assert "quality_tag" in filtered.columns
 
     pkg = analysis.build_best_model(cv=2, scoring="accuracy")

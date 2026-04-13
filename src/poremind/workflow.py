@@ -11,8 +11,10 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.ensemble import AdaBoostClassifier, IsolationForest, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_score
+from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import StratifiedKFold
 from sklearn.naive_bayes import GaussianNB
+from scipy.signal import find_peaks
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.neural_network import MLPClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -259,25 +261,122 @@ class MultiSampleAnalysis:
         self.feature_df = pd.DataFrame(rows)
         return self.feature_df
 
+    @staticmethod
+    def _blockade_gmm_mask(
+        df: pd.DataFrame,
+        rm_index: np.ndarray | None = None,
+        blockade_col: str = "blockade_ratio",
+        dwell_col: str = "duration_s",
+        n_components: int = 2,
+        visualize: bool = False,
+        prior_mean: float | None = None,
+    ) -> np.ndarray:
+        if blockade_col not in df.columns:
+            raise ValueError(f"missing blockade column: {blockade_col}")
+        if dwell_col not in df.columns:
+            raise ValueError(f"missing dwell column: {dwell_col}")
+
+        X = df.copy()
+        if rm_index is None:
+            rm_index = np.ones(len(X), dtype=bool)
+
+        data = X.loc[rm_index, blockade_col].to_numpy(dtype=float)
+        if len(data) < 5:
+            return rm_index
+
+        # KDE-based peak counting (no seaborn dependency)
+        grid = np.linspace(np.nanmin(data), np.nanmax(data), 256)
+        bw = max(1e-6, np.std(data) * 0.2)
+        density = np.sum(np.exp(-0.5 * ((grid[:, None] - data[None, :]) / bw) ** 2), axis=1)
+        peaks, _ = find_peaks(density)
+
+        if visualize:
+            try:
+                import matplotlib.pyplot as plt
+            except Exception as exc:  # pragma: no cover
+                raise ImportError("blockade_gmm visualization requires matplotlib") from exc
+            fig, axs = plt.subplots(2, 1, sharex=False, gridspec_kw={"height_ratios": [1, 3]}, figsize=(4, 5))
+            axs[0].plot(grid, density)
+            if len(peaks):
+                axs[0].plot(grid[peaks], density[peaks], "ro")
+            axs[0].set_ylabel("Density")
+            axs[1].scatter(X[blockade_col], np.log10(X[dwell_col].to_numpy(dtype=float) + 1e-12), c=rm_index, alpha=0.5, s=4)
+            axs[1].set_xlabel(blockade_col)
+            axs[1].set_ylabel(f"log10({dwell_col})")
+            plt.tight_layout()
+
+        if len(peaks) > 1:
+            data2 = X.loc[rm_index, blockade_col].to_numpy(dtype=float).reshape(-1, 1)
+            gmm = GaussianMixture(n_components=n_components, random_state=42)
+            gmm.fit(data2)
+            labels = gmm.predict(data2)
+
+            means = gmm.means_.flatten()
+            covariances = np.sqrt(gmm.covariances_).flatten()
+            valid_indices = np.where((means >= 0) & (means <= 1.2))[0]
+            if len(valid_indices) == 0:
+                valid_indices = np.arange(len(means))
+
+            if prior_mean is None:
+                if len(valid_indices) > 1:
+                    target = valid_indices[np.argmin(covariances[valid_indices])]
+                else:
+                    target = valid_indices[0]
+            else:
+                if len(valid_indices) > 1:
+                    target = valid_indices[np.argmin(np.abs(means[valid_indices] - prior_mean))]
+                else:
+                    target = valid_indices[0]
+
+            local = rm_index.copy()
+            local_idx = np.where(rm_index)[0]
+            local[local_idx] = labels == target
+            return local
+
+        return rm_index
+
     # Step 4: noise/outlier flagging
-    def filter_events(self, method: str = "isolation_forest", contamination: float = 0.05, feature_cols: list[str] | None = None) -> pd.DataFrame:
+    def filter_events(
+        self,
+        method: str = "blockade_gmm",
+        contamination: float = 0.05,
+        feature_cols: list[str] | None = None,
+        blockade_col: str = "blockade_ratio",
+        dwell_col: str = "duration_s",
+        rm_index: np.ndarray | None = None,
+        n_components: int = 2,
+        prior_mean: float | None = None,
+        visualize: bool = False,
+    ) -> pd.DataFrame:
         if self.feature_df is None:
             self.extract_features()
         assert self.feature_df is not None
         df = self.feature_df.copy()
-        feature_cols = feature_cols or select_feature_columns(df)
-        X = df[feature_cols].fillna(0.0)
 
-        if method == "isolation_forest":
-            detector = IsolationForest(contamination=contamination, random_state=42)
-            pred = detector.fit_predict(X)
-        elif method == "lof":
-            detector = LocalOutlierFactor(contamination=contamination)
-            pred = detector.fit_predict(X)
+        if method in {"blockade_gmm", "peak_detection"}:
+            valid_mask = self._blockade_gmm_mask(
+                df,
+                rm_index=rm_index,
+                blockade_col=blockade_col,
+                dwell_col=dwell_col,
+                n_components=n_components,
+                visualize=visualize,
+                prior_mean=prior_mean,
+            )
+            df["is_noise"] = ~valid_mask
         else:
-            raise ValueError("unsupported outlier method")
+            feature_cols = feature_cols or select_feature_columns(df)
+            X = df[feature_cols].fillna(0.0)
+            if method == "isolation_forest":
+                detector = IsolationForest(contamination=contamination, random_state=42)
+                pred = detector.fit_predict(X)
+            elif method == "lof":
+                detector = LocalOutlierFactor(contamination=contamination)
+                pred = detector.fit_predict(X)
+            else:
+                raise ValueError("unsupported outlier method")
+            df["is_noise"] = pred == -1
 
-        df["is_noise"] = pred == -1
         df["quality_tag"] = np.where(df["is_noise"], "noise", "valid")
         self.filtered_df = df
         return df
