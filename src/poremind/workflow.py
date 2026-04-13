@@ -191,6 +191,10 @@ class MultiSampleAnalysis:
     ) -> list[Event]:
         if len(events) <= 1:
             return events
+        sigma = float(np.std(signal - baseline)) + 1e-12
+        res = baseline - signal
+        cumsum_res = np.concatenate(([0.0], np.cumsum(res, dtype=float)))
+        cumsum_base = np.concatenate(([0.0], np.cumsum(baseline, dtype=float)))
         gap_samples = max(0, int((merge_gap_ms / 1000.0) * sampling_rate_hz))
         merged: list[Event] = []
         cur_start = events[0].start_idx
@@ -199,19 +203,56 @@ class MultiSampleAnalysis:
             if e.start_idx - cur_end <= gap_samples:
                 cur_end = max(cur_end, e.end_idx)
             else:
-                merged.append(MultiSampleAnalysis._build_event(cur_start, cur_end, signal, baseline, sampling_rate_hz))
+                merged.append(
+                    MultiSampleAnalysis._build_event(
+                        cur_start,
+                        cur_end,
+                        signal,
+                        baseline,
+                        sampling_rate_hz,
+                        sigma=sigma,
+                        cumsum_res=cumsum_res,
+                        cumsum_base=cumsum_base,
+                    )
+                )
                 cur_start, cur_end = e.start_idx, e.end_idx
-        merged.append(MultiSampleAnalysis._build_event(cur_start, cur_end, signal, baseline, sampling_rate_hz))
+        merged.append(
+            MultiSampleAnalysis._build_event(
+                cur_start,
+                cur_end,
+                signal,
+                baseline,
+                sampling_rate_hz,
+                sigma=sigma,
+                cumsum_res=cumsum_res,
+                cumsum_base=cumsum_base,
+            )
+        )
         return merged
 
     @staticmethod
-    def _build_event(start_idx: int, end_idx: int, signal: np.ndarray, baseline: np.ndarray, sr: float) -> Event:
-        seg_signal = signal[start_idx:end_idx]
-        seg_base = baseline[start_idx:end_idx]
-        delta_i = float(np.mean(seg_base - seg_signal))
-        baseline_local = float(np.mean(seg_base))
+    def _build_event(
+        start_idx: int,
+        end_idx: int,
+        signal: np.ndarray,
+        baseline: np.ndarray,
+        sr: float,
+        sigma: float | None = None,
+        cumsum_res: np.ndarray | None = None,
+        cumsum_base: np.ndarray | None = None,
+    ) -> Event:
+        n = max(1, end_idx - start_idx)
+        if cumsum_res is not None and cumsum_base is not None:
+            delta_i = float((cumsum_res[end_idx] - cumsum_res[start_idx]) / n)
+            baseline_local = float((cumsum_base[end_idx] - cumsum_base[start_idx]) / n)
+        else:
+            seg_signal = signal[start_idx:end_idx]
+            seg_base = baseline[start_idx:end_idx]
+            delta_i = float(np.mean(seg_base - seg_signal))
+            baseline_local = float(np.mean(seg_base))
         dwell = (end_idx - start_idx) / sr
-        sigma = float(np.std(signal - baseline)) + 1e-12
+        if sigma is None:
+            sigma = float(np.std(signal - baseline)) + 1e-12
         snr = delta_i / sigma
         return Event(start_idx=start_idx, end_idx=end_idx, baseline_local=baseline_local, delta_i=delta_i, dwell_time_s=dwell, snr=snr)
 
@@ -350,24 +391,39 @@ class MultiSampleAnalysis:
     @staticmethod
     def _mask_to_events(mask: np.ndarray, baseline: np.ndarray, signal: np.ndarray, sr: float, min_duration_s: float) -> list[Event]:
         min_samples = max(1, int(min_duration_s * sr))
-        out: list[Event] = []
-        i = 0
-        n = len(mask)
         sigma = float(np.std(signal - baseline)) + 1e-12
-        while i < n:
-            if not mask[i]:
-                i += 1
-                continue
-            s = i
-            while i < n and mask[i]:
-                i += 1
-            e = i
-            if e - s < min_samples:
-                continue
-            seg_signal = signal[s:e]
-            seg_base = baseline[s:e]
-            delta_i = float(np.mean(seg_base - seg_signal))
-            out.append(Event(s, e, float(np.mean(seg_base)), delta_i, (e - s) / sr, delta_i / sigma))
+        if len(mask) == 0:
+            return []
+
+        m = mask.astype(np.int8, copy=False)
+        d = np.diff(m)
+        starts = np.flatnonzero(d == 1) + 1
+        ends = np.flatnonzero(d == -1) + 1
+        if bool(mask[0]):
+            starts = np.r_[0, starts]
+        if bool(mask[-1]):
+            ends = np.r_[ends, len(mask)]
+
+        if len(starts) == 0:
+            return []
+
+        dur = ends - starts
+        valid = dur >= min_samples
+        starts = starts[valid]
+        ends = ends[valid]
+        if len(starts) == 0:
+            return []
+
+        res = baseline - signal
+        cumsum_res = np.concatenate(([0.0], np.cumsum(res, dtype=float)))
+        cumsum_base = np.concatenate(([0.0], np.cumsum(baseline, dtype=float)))
+
+        out: list[Event] = []
+        for s, e in zip(starts.tolist(), ends.tolist()):
+            n = e - s
+            delta_i = float((cumsum_res[e] - cumsum_res[s]) / n)
+            baseline_local = float((cumsum_base[e] - cumsum_base[s]) / n)
+            out.append(Event(s, e, baseline_local, delta_i, n / sr, delta_i / sigma))
         return out
 
     # Step 3: feature extraction (built-in + custom)
