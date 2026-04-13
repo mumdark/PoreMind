@@ -43,12 +43,15 @@ analysis.pl.current(sample_id=None, current="denoise", start_ms=0.0, end_ms=1.0,
 
 features = analysis.extract_features()  # 含 segment_skew / segment_kurt / peak_factor 等特征
 filtered = analysis.filter_events(method="isolation_forest", contamination=0.05)
-best_pkg = analysis.build_best_model(cv=10)
+best_pkg = analysis.build_best_model(cv=10, scoring="accuracy")
+analysis.pl.model_cm(model_name=best_pkg["best_model"], split="test")
+analysis.pl.model_metric_bar(metric="accuracy", split="test")
 pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="abf")
 ```
 
 > 说明：ABF 模式默认会遍历该文件全部 channel 与 sweep，并在事件表中输出 `channel`、`sweep` 列。
 > 默认降噪方法为 `butterworth_filtfilt`（零相位滤波，不引入相位延迟），需安装 `scipy`。
 > 事件检测支持 `threshold`、`zscore_threshold`、`cusum`、`pelt`、`hmm`，并提供默认参数。
+> 默认建模候选包含 RF / LR / SVM / MLP / ElasticNet / Lasso / 决策树 / LDA / AdaBoost / 高斯朴素贝叶斯。
 
 完整逐步 notebook：`notebooks/step_by_step_analysis.ipynb`

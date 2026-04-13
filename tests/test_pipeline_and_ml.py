@@ -54,8 +54,14 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     filtered = analysis.filter_events(method="isolation_forest", contamination=0.1)
     assert "quality_tag" in filtered.columns
 
-    pkg = analysis.build_best_model(cv=2)
+    pkg = analysis.build_best_model(cv=2, scoring="accuracy")
     assert "best_model" in pkg
+    assert pkg["best_model"] in analysis.model_cv_results
+    try:
+        _ = analysis.pl.model_metric_bar(metric="accuracy", split="test")
+        _ = analysis.pl.model_cm(model_name=pkg["best_model"], split="test")
+    except ImportError:
+        pass
 
     pred = analysis.classify_new_samples({"U1": new_s}, reader="csv")
     assert "pred_label" in pred.columns

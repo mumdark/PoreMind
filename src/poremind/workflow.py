@@ -7,12 +7,15 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
-from sklearn.ensemble import IsolationForest, RandomForestClassifier
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.ensemble import AdaBoostClassifier, IsolationForest, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import LocalOutlierFactor
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.neural_network import MLPClassifier
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import SVC
 
 from .baseline import estimate_baseline
@@ -45,6 +48,7 @@ class MultiSampleAnalysis:
     feature_df: pd.DataFrame | None = None
     filtered_df: pd.DataFrame | None = None
     best_model_package: dict[str, Any] | None = None
+    model_cv_results: dict[str, Any] = field(default_factory=dict)
 
     preprocess_state: dict[str, Any] = field(default_factory=dict)
     detect_state: dict[str, Any] = field(default_factory=dict)
@@ -279,12 +283,104 @@ class MultiSampleAnalysis:
         return df
 
     # Step 5: model selection (10-fold)
+    @staticmethod
+    def _metric_config(y: pd.Series) -> dict[str, Any]:
+        classes = sorted(pd.unique(y))
+        if len(classes) == 2:
+            return {"average": "binary", "pos_label": classes[-1], "mode": "binary"}
+        return {"average": "macro", "pos_label": None, "mode": "macro"}
+
+    @staticmethod
+    def _score_value(metric_name: str, y_true: np.ndarray, y_pred: np.ndarray, cfg: dict[str, Any]) -> float:
+        if metric_name == "accuracy":
+            return float(accuracy_score(y_true, y_pred))
+        if metric_name == "f1":
+            if cfg["average"] == "binary":
+                return float(f1_score(y_true, y_pred, average="binary", pos_label=cfg["pos_label"], zero_division=0))
+            return float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+        if metric_name == "recall":
+            if cfg["average"] == "binary":
+                return float(recall_score(y_true, y_pred, average="binary", pos_label=cfg["pos_label"], zero_division=0))
+            return float(recall_score(y_true, y_pred, average="macro", zero_division=0))
+        raise ValueError("unsupported metric name")
+
+    def _evaluate_model_cv(self, est: Any, X: pd.DataFrame, y: pd.Series, cv: int) -> dict[str, Any]:
+        cfg = self._metric_config(y)
+        splitter = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+        folds: list[dict[str, Any]] = []
+
+        all_labels = sorted(pd.unique(y))
+        zero_cm = np.zeros((len(all_labels), len(all_labels)), dtype=int)
+
+        for fold_id, (tr_idx, te_idx) in enumerate(splitter.split(X, y), start=1):
+            model = clone(est)
+            X_tr, X_te = X.iloc[tr_idx], X.iloc[te_idx]
+            y_tr, y_te = y.iloc[tr_idx], y.iloc[te_idx]
+            try:
+                model.fit(X_tr, y_tr)
+                pred_tr = model.predict(X_tr)
+                pred_te = model.predict(X_te)
+
+                fold = {
+                    "fold": fold_id,
+                    "train_n": int(len(y_tr)),
+                    "test_n": int(len(y_te)),
+                    "train_f1": self._score_value("f1", y_tr.to_numpy(), pred_tr, cfg),
+                    "train_accuracy": self._score_value("accuracy", y_tr.to_numpy(), pred_tr, cfg),
+                    "train_recall": self._score_value("recall", y_tr.to_numpy(), pred_tr, cfg),
+                    "test_f1": self._score_value("f1", y_te.to_numpy(), pred_te, cfg),
+                    "test_accuracy": self._score_value("accuracy", y_te.to_numpy(), pred_te, cfg),
+                    "test_recall": self._score_value("recall", y_te.to_numpy(), pred_te, cfg),
+                    "train_cm": confusion_matrix(y_tr, pred_tr, labels=all_labels),
+                    "test_cm": confusion_matrix(y_te, pred_te, labels=all_labels),
+                    "fit_error": None,
+                }
+            except Exception as exc:
+                fold = {
+                    "fold": fold_id,
+                    "train_n": int(len(y_tr)),
+                    "test_n": int(len(y_te)),
+                    "train_f1": np.nan,
+                    "train_accuracy": np.nan,
+                    "train_recall": np.nan,
+                    "test_f1": np.nan,
+                    "test_accuracy": np.nan,
+                    "test_recall": np.nan,
+                    "train_cm": zero_cm.copy(),
+                    "test_cm": zero_cm.copy(),
+                    "fit_error": str(exc),
+                }
+            folds.append(fold)
+
+        train_total = sum(f["train_n"] for f in folds)
+        test_total = sum(f["test_n"] for f in folds)
+
+        def wavg(key: str, split_total: int, n_key: str) -> float:
+            items = [(f[key], f[n_key]) for f in folds if not np.isnan(f[key])]
+            if not items:
+                return float("nan")
+            denom = max(1, sum(w for _, w in items))
+            return float(sum(v * w for v, w in items) / denom)
+
+        agg = {
+            "train_n_total": train_total,
+            "test_n_total": test_total,
+            "train_f1_weighted": wavg("train_f1", train_total, "train_n"),
+            "train_accuracy_weighted": wavg("train_accuracy", train_total, "train_n"),
+            "train_recall_weighted": wavg("train_recall", train_total, "train_n"),
+            "test_f1_weighted": wavg("test_f1", test_total, "test_n"),
+            "test_accuracy_weighted": wavg("test_accuracy", test_total, "test_n"),
+            "test_recall_weighted": wavg("test_recall", test_total, "test_n"),
+            "average_mode": cfg["mode"],
+        }
+        return {"folds": folds, "aggregate": agg}
+
     def build_best_model(
         self,
         models: dict[str, Any] | None = None,
         label_col: str = "label",
         cv: int = 10,
-        scoring: str = "f1_macro",
+        scoring: str = "accuracy",
         exclude_noise: bool = True,
     ) -> dict[str, Any]:
         if self.filtered_df is None:
@@ -301,32 +397,53 @@ class MultiSampleAnalysis:
         y = df[label_col]
 
         models = models or {
-            "logreg": Pipeline([("scaler", StandardScaler()), ("model", LogisticRegression(max_iter=2000))]),
-            "rf": RandomForestClassifier(n_estimators=400, random_state=42),
-            "svm": Pipeline([("scaler", StandardScaler()), ("model", SVC(probability=True))]),
+            "Random Forest": RandomForestClassifier(random_state=42, n_jobs=-1),
+            "Logistic Regression": LogisticRegression(max_iter=500, random_state=42, n_jobs=-1),
+            "SVM": SVC(probability=True, random_state=42),
+            "Neural Network": MLPClassifier(max_iter=500, random_state=42),
+            "Elastic Net": LogisticRegression(penalty="elasticnet", solver="saga", l1_ratio=0.5, max_iter=500, random_state=42, n_jobs=-1),
+            "Lasso": LogisticRegression(penalty="l1", solver="saga", max_iter=500, random_state=42, n_jobs=-1),
+            "Decision Tree": DecisionTreeClassifier(random_state=42),
+            "LDA": LDA(),
+            "AdaBoost": AdaBoostClassifier(random_state=42),
+            "Naive Bayes": GaussianNB(),
         }
 
-        splitter = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+        scoring_key_map = {
+            "f1": "test_f1_weighted",
+            "f1_macro": "test_f1_weighted",
+            "accuracy": "test_accuracy_weighted",
+            "accuracy_macro": "test_accuracy_weighted",
+            "recall": "test_recall_weighted",
+            "recall_macro": "test_recall_weighted",
+        }
+        score_key = scoring_key_map.get(scoring, "test_accuracy_weighted")
+
+        self.model_cv_results = {}
         scores: dict[str, float] = {}
         best_name = None
         best_score = -np.inf
         best_estimator = None
 
         for name, est in models.items():
-            s = float(np.mean(cross_val_score(est, X, y, cv=splitter, scoring=scoring)))
+            cv_result = self._evaluate_model_cv(est, X, y, cv=cv)
+            self.model_cv_results[name] = cv_result
+            s = float(cv_result["aggregate"][score_key])
             scores[name] = s
-            if s > best_score:
+            if not np.isnan(s) and s > best_score:
                 best_score = s
                 best_name = name
                 best_estimator = clone(est)
 
-        assert best_estimator is not None and best_name is not None
+        if best_estimator is None or best_name is None:
+            raise RuntimeError("all candidate models failed during CV; check labels/class balance")
         best_estimator.fit(X, y)
         self.best_model_package = {
             "model": best_estimator,
             "feature_cols": feature_cols,
             "scores": scores,
             "best_model": best_name,
+            "cv_results": self.model_cv_results,
             "preprocess_state": self.preprocess_state,
             "detect_state": self.detect_state,
             "feature_state": self.feature_state,
