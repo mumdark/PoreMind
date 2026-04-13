@@ -14,7 +14,8 @@
 ```bash
 conda create -n poremind python=3.10 -y
 conda activate poremind
-pip install -e . # -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn 
+pip install -e . # -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+pip install pyabf 
 ```
 
 ## 快速用法（ABF 输入）
