@@ -2,6 +2,7 @@
 **Module:** `workflow.py`
 
 Runs baseline estimation and event detection for each denoised trace.
+For fast local tuning on a bounded time window, see `detect_events_simple`.
 
 ## Parameters
 - `detect_method` (`str`): Detection method: threshold, zscore_threshold, cusum, pelt, hmm.

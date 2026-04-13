@@ -54,6 +54,17 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     filtered = analysis.filter_events()
     assert "quality_tag" in filtered.columns
 
+    simple_events = analysis.detect_events_simple(
+        sample_id="A1",
+        current="denoise",
+        start_ms=0.0,
+        end_ms=300.0,
+        detect_method="threshold",
+        detect_params={"sigma_k": 3.0, "min_duration_s": 0.001},
+    )
+    assert "A1" in simple_events
+    assert analysis.detect_events_simple_object == simple_events
+
     pkg = analysis.build_best_model(cv=2, scoring="accuracy")
     assert "best_model" in pkg
     assert pkg["best_model"] in analysis.model_cv_results
@@ -62,6 +73,8 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         _ = analysis.pl.model_cm(model_name=pkg["best_model"], split="test")
         _ = analysis.pl.plot_2d(data="filtered", value="label")
         _ = analysis.pl.plot_3d(data="filtered", value="label")
+        _ = analysis.plot.event_current_simple(sample_id="A1", start_event=1, end_event=2)
+        _ = analysis.plot.event_current(sample_id="A1", start_event=1, end_event=2)
     except ImportError:
         pass
 
