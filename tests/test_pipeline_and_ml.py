@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from poremind.workflow import create_analysis_object
+from poremind import __version__, create_analysis_object
 
 
 def _make_trace(path: Path, seed: int):
@@ -17,6 +17,8 @@ def _make_trace(path: Path, seed: int):
 
 
 def test_object_workflow_end_to_end(tmp_path: Path):
+    assert __version__
+
     s1 = tmp_path / "A1.csv"
     s2 = tmp_path / "B1.csv"
     new_s = tmp_path / "U1.csv"
