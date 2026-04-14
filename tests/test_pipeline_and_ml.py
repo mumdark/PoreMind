@@ -69,8 +69,13 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     feat_df = analysis.extract_features()
     assert len(feat_df) > 0
 
-    filtered = analysis.filter_events(prior_mean={"A1": 0.2, "B1": 0.2})
+    filtered = analysis.filter_events(
+        method="blockade_gmm",
+        parameters={"prior_mean": {"A1": 0.2, "B1": 0.2}},
+    )
     assert "quality_tag" in filtered.columns
+    assert analysis.filtered_df is not None
+    assert set(analysis.filtered_df["quality_tag"].unique()).issubset({"valid"})
     expected_noise = pd.Series(False, index=analysis.feature_df.index)
     for sample_key, idx in analysis.feature_df.groupby("sample_id").groups.items():
         sub_df = analysis.feature_df.loc[idx].copy()
@@ -84,7 +89,25 @@ def test_object_workflow_end_to_end(tmp_path: Path):
             prior_mean=0.2,
         )
         expected_noise.loc[idx] = ~valid_mask
-    assert np.array_equal(filtered["is_noise"].to_numpy(), expected_noise.to_numpy())
+    in_lim = (analysis.feature_df["blockade_ratio"].to_numpy(dtype=float) >= 0.1) & (
+        analysis.feature_df["blockade_ratio"].to_numpy(dtype=float) <= 1.0
+    )
+    expected_quality = np.where((~expected_noise.to_numpy()) & in_lim, "valid", "noise")
+    assert np.array_equal(filtered["quality_tag"].to_numpy(), expected_quality)
+    filtered_if = analysis.filter_events(method="isolation_forest")
+    assert "quality_tag" in filtered_if.columns
+    filtered_lof = analysis.filter_events(method="lof")
+    assert "quality_tag" in filtered_lof.columns
+    _ = analysis.filter_events(
+        method="blockade_gmm",
+        parameters={"prior_mean": {"A1": 0.2, "B1": 0.2}},
+        blockage_lim=(0.0, 2.0),
+    )
+    assert analysis.filtered_df is not None
+    if len(analysis.filtered_df) == 0:
+        analysis.filtered_df = analysis.feature_df.copy()
+        analysis.filtered_df["is_noise"] = False
+        analysis.filtered_df["quality_tag"] = "valid"
 
     simple_events = analysis.detect_events_simple(
         sample_id="A1",

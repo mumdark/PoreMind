@@ -744,23 +744,51 @@ class MultiSampleAnalysis:
     def filter_events(
         self,
         method: str = "blockade_gmm",
-        contamination: float = 0.05,
-        feature_cols: list[str] | None = None,
-        blockade_col: str = "blockade_ratio",
-        dwell_col: str = "duration_s",
-        rm_index: np.ndarray | None = None,
-        n_components: int = 2,
-        prior_mean: float | dict[str, float] | None = None,
-        visualize: bool = False,
+        parameters: dict[str, Any] | None = None,
+        blockage_lim: tuple[float, float] = (0.1, 1.0),
     ) -> pd.DataFrame:
         if self.feature_df is None:
             self.extract_features()
         assert self.feature_df is not None
         df = self.feature_df.copy()
+
+        method = method.lower()
+        default_params: dict[str, dict[str, Any]] = {
+            "blockade_gmm": {
+                "blockade_col": "blockade_ratio",
+                "dwell_col": "duration_s",
+                "rm_index": None,
+                "n_components": 2,
+                "prior_mean": None,
+                "visualize": False,
+            },
+            "peak_detection": {
+                "blockade_col": "blockade_ratio",
+                "dwell_col": "duration_s",
+                "rm_index": None,
+                "n_components": 2,
+                "prior_mean": None,
+                "visualize": False,
+            },
+            "isolation_forest": {
+                "contamination": 0.05,
+                "feature_cols": ["duration_s", "blockade_ratio", "segment_skew", "segment_kurt"],
+            },
+            "lof": {
+                "contamination": 0.05,
+                "feature_cols": ["duration_s", "blockade_ratio", "segment_skew", "segment_kurt"],
+            },
+        }
+        if method not in default_params:
+            raise ValueError("unsupported outlier method")
+        cfg = default_params[method].copy()
+        if parameters:
+            cfg.update(parameters)
+
         if len(df) == 0:
             df["is_noise"] = []
             df["quality_tag"] = []
-            self.filtered_df = df
+            self.filtered_df = df.copy()
             return df
 
         group_col = "sample_id" if "sample_id" in df.columns else ("trace_id" if "trace_id" in df.columns else None)
@@ -770,47 +798,56 @@ class MultiSampleAnalysis:
             group_slices = [(str(sample_key), idx) for sample_key, idx in df.groupby(group_col).groups.items()]
 
         rm_series = None
+        rm_index = cfg.get("rm_index")
         if rm_index is not None:
+            rm_index = np.asarray(rm_index, dtype=bool)
             if len(rm_index) != len(df):
                 raise ValueError("rm_index length must match feature dataframe rows")
-            rm_series = pd.Series(rm_index.astype(bool), index=df.index)
+            rm_series = pd.Series(rm_index, index=df.index)
 
         df["is_noise"] = False
         for sample_key, idx in group_slices:
             sub_df = df.loc[idx].copy()
             sub_rm_index = None if rm_series is None else rm_series.loc[idx].to_numpy(dtype=bool)
             sample_prior_mean: float | None
-            if isinstance(prior_mean, dict):
-                sample_prior_mean = prior_mean.get(sample_key)
+            prior_mean_cfg = cfg.get("prior_mean")
+            if isinstance(prior_mean_cfg, dict):
+                sample_prior_mean = prior_mean_cfg.get(sample_key)
             else:
-                sample_prior_mean = prior_mean
+                sample_prior_mean = prior_mean_cfg
 
             if method in {"blockade_gmm", "peak_detection"}:
                 valid_mask = self._blockade_gmm_mask(
                     sub_df,
                     rm_index=sub_rm_index,
-                    blockade_col=blockade_col,
-                    dwell_col=dwell_col,
-                    n_components=n_components,
-                    visualize=visualize,
+                    blockade_col=str(cfg["blockade_col"]),
+                    dwell_col=str(cfg["dwell_col"]),
+                    n_components=int(cfg["n_components"]),
+                    visualize=bool(cfg["visualize"]),
                     prior_mean=sample_prior_mean,
                 )
                 df.loc[idx, "is_noise"] = ~valid_mask
             else:
-                local_feature_cols = feature_cols or select_feature_columns(sub_df)
+                local_feature_cols = list(cfg.get("feature_cols") or select_feature_columns(sub_df))
                 X = sub_df[local_feature_cols].fillna(0.0)
                 if method == "isolation_forest":
-                    detector = IsolationForest(contamination=contamination, random_state=42)
+                    detector = IsolationForest(contamination=float(cfg["contamination"]), random_state=42)
                     pred = detector.fit_predict(X)
                 elif method == "lof":
-                    detector = LocalOutlierFactor(contamination=contamination)
+                    detector = LocalOutlierFactor(contamination=float(cfg["contamination"]))
                     pred = detector.fit_predict(X)
                 else:
                     raise ValueError("unsupported outlier method")
                 df.loc[idx, "is_noise"] = pred == -1
 
-        df["quality_tag"] = np.where(df["is_noise"], "noise", "valid")
-        self.filtered_df = df
+        blockade_col = str(cfg.get("blockade_col", "blockade_ratio"))
+        if blockade_col not in df.columns:
+            raise ValueError(f"missing blockade column for blockage_lim filtering: {blockade_col}")
+        lo, hi = float(blockage_lim[0]), float(blockage_lim[1])
+        in_blockage_lim = (df[blockade_col].to_numpy(dtype=float) >= lo) & (df[blockade_col].to_numpy(dtype=float) <= hi)
+
+        df["quality_tag"] = np.where((~df["is_noise"]) & in_blockage_lim, "valid", "noise")
+        self.filtered_df = df[df["quality_tag"] == "valid"].copy()
         return df
 
     # Step 5: model selection (10-fold)
