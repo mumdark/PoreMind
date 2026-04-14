@@ -14,7 +14,6 @@ from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_s
 from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import StratifiedKFold
 from sklearn.naive_bayes import GaussianNB
-from scipy.signal import find_peaks
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.neural_network import MLPClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -689,11 +688,10 @@ class MultiSampleAnalysis:
         if len(data) < 5:
             return rm_index
 
-        # KDE-based peak counting (no seaborn dependency)
+        # KDE curve is kept only for optional visualization.
         grid = np.linspace(np.nanmin(data), np.nanmax(data), 256)
         bw = max(1e-6, np.std(data) * 0.2)
         density = np.sum(np.exp(-0.5 * ((grid[:, None] - data[None, :]) / bw) ** 2), axis=1)
-        peaks, _ = find_peaks(density)
 
         if visualize:
             try:
@@ -702,43 +700,38 @@ class MultiSampleAnalysis:
                 raise ImportError("blockade_gmm visualization requires matplotlib") from exc
             fig, axs = plt.subplots(2, 1, sharex=False, gridspec_kw={"height_ratios": [1, 3]}, figsize=(4, 5))
             axs[0].plot(grid, density)
-            if len(peaks):
-                axs[0].plot(grid[peaks], density[peaks], "ro")
             axs[0].set_ylabel("Density")
             axs[1].scatter(X[blockade_col], np.log10(X[dwell_col].to_numpy(dtype=float) + 1e-12), c=rm_index, alpha=0.5, s=4)
             axs[1].set_xlabel(blockade_col)
             axs[1].set_ylabel(f"log10({dwell_col})")
             plt.tight_layout()
 
-        if len(peaks) > 1:
-            data2 = X.loc[rm_index, blockade_col].to_numpy(dtype=float).reshape(-1, 1)
-            gmm = GaussianMixture(n_components=n_components, random_state=42)
-            gmm.fit(data2)
-            labels = gmm.predict(data2)
+        data2 = X.loc[rm_index, blockade_col].to_numpy(dtype=float).reshape(-1, 1)
+        gmm = GaussianMixture(n_components=n_components, random_state=42)
+        gmm.fit(data2)
+        labels = gmm.predict(data2)
 
-            means = gmm.means_.flatten()
-            covariances = np.sqrt(gmm.covariances_).flatten()
-            valid_indices = np.where((means >= 0) & (means <= 1.2))[0]
-            if len(valid_indices) == 0:
-                valid_indices = np.arange(len(means))
+        means = gmm.means_.flatten()
+        covariances = np.sqrt(gmm.covariances_).flatten()
+        valid_indices = np.where((means >= 0) & (means <= 1.2))[0]
+        if len(valid_indices) == 0:
+            valid_indices = np.arange(len(means))
 
-            if prior_mean is None:
-                if len(valid_indices) > 1:
-                    target = valid_indices[np.argmin(covariances[valid_indices])]
-                else:
-                    target = valid_indices[0]
+        if prior_mean is None:
+            if len(valid_indices) > 1:
+                target = valid_indices[np.argmin(covariances[valid_indices])]
             else:
-                if len(valid_indices) > 1:
-                    target = valid_indices[np.argmin(np.abs(means[valid_indices] - prior_mean))]
-                else:
-                    target = valid_indices[0]
+                target = valid_indices[0]
+        else:
+            if len(valid_indices) > 1:
+                target = valid_indices[np.argmin(np.abs(means[valid_indices] - prior_mean))]
+            else:
+                target = valid_indices[0]
 
-            local = rm_index.copy()
-            local_idx = np.where(rm_index)[0]
-            local[local_idx] = labels == target
-            return local
-
-        return rm_index
+        local = rm_index.copy()
+        local_idx = np.where(rm_index)[0]
+        local[local_idx] = labels == target
+        return local
 
     # Step 4: noise/outlier flagging
     def filter_events(
@@ -746,7 +739,7 @@ class MultiSampleAnalysis:
         method: str = "blockade_gmm",
         parameters: dict[str, Any] | None = None,
         blockage_lim: tuple[float, float] = (0.1, 1.0),
-    ) -> pd.DataFrame:
+    ) -> None:
         if self.feature_df is None:
             self.extract_features()
         assert self.feature_df is not None
@@ -788,8 +781,9 @@ class MultiSampleAnalysis:
         if len(df) == 0:
             df["is_noise"] = []
             df["quality_tag"] = []
+            self.feature_df = df
             self.filtered_df = df.copy()
-            return df
+            return
 
         group_col = "sample_id" if "sample_id" in df.columns else ("trace_id" if "trace_id" in df.columns else None)
         if group_col is None:
@@ -805,10 +799,21 @@ class MultiSampleAnalysis:
                 raise ValueError("rm_index length must match feature dataframe rows")
             rm_series = pd.Series(rm_index, index=df.index)
 
-        df["is_noise"] = False
+        blockade_col = str(cfg.get("blockade_col", "blockade_ratio"))
+        if blockade_col not in df.columns:
+            raise ValueError(f"missing blockade column for blockage_lim filtering: {blockade_col}")
+        lo, hi = float(blockage_lim[0]), float(blockage_lim[1])
+        in_blockage_lim = (df[blockade_col].to_numpy(dtype=float) >= lo) & (df[blockade_col].to_numpy(dtype=float) <= hi)
+        in_lim_series = pd.Series(in_blockage_lim, index=df.index)
+
+        # Hard threshold first: out-of-range events are fixed as noise.
+        df["is_noise"] = ~in_blockage_lim
         for sample_key, idx in group_slices:
-            sub_df = df.loc[idx].copy()
-            sub_rm_index = None if rm_series is None else rm_series.loc[idx].to_numpy(dtype=bool)
+            idx_in = idx[in_lim_series.loc[idx].to_numpy(dtype=bool)]
+            if len(idx_in) == 0:
+                continue
+            sub_df = df.loc[idx_in].copy()
+            sub_rm_index = None if rm_series is None else rm_series.loc[idx_in].to_numpy(dtype=bool)
             sample_prior_mean: float | None
             prior_mean_cfg = cfg.get("prior_mean")
             if isinstance(prior_mean_cfg, dict):
@@ -826,7 +831,7 @@ class MultiSampleAnalysis:
                     visualize=bool(cfg["visualize"]),
                     prior_mean=sample_prior_mean,
                 )
-                df.loc[idx, "is_noise"] = ~valid_mask
+                df.loc[idx_in, "is_noise"] = ~valid_mask
             else:
                 local_feature_cols = list(cfg.get("feature_cols") or select_feature_columns(sub_df))
                 X = sub_df[local_feature_cols].fillna(0.0)
@@ -838,17 +843,12 @@ class MultiSampleAnalysis:
                     pred = detector.fit_predict(X)
                 else:
                     raise ValueError("unsupported outlier method")
-                df.loc[idx, "is_noise"] = pred == -1
+                df.loc[idx_in, "is_noise"] = pred == -1
 
-        blockade_col = str(cfg.get("blockade_col", "blockade_ratio"))
-        if blockade_col not in df.columns:
-            raise ValueError(f"missing blockade column for blockage_lim filtering: {blockade_col}")
-        lo, hi = float(blockage_lim[0]), float(blockage_lim[1])
-        in_blockage_lim = (df[blockade_col].to_numpy(dtype=float) >= lo) & (df[blockade_col].to_numpy(dtype=float) <= hi)
-
-        df["quality_tag"] = np.where((~df["is_noise"]) & in_blockage_lim, "valid", "noise")
+        df["quality_tag"] = np.where(~df["is_noise"], "valid", "noise")
+        self.feature_df = df
         self.filtered_df = df[df["quality_tag"] == "valid"].copy()
-        return df
+        return
 
     # Step 5: model selection (10-fold)
     @staticmethod

@@ -60,7 +60,7 @@ analysis.plot.event_current_simple(sample_id=None, current="denoise", start_even
 analysis.plot.event_current(sample_id=None, current="denoise", start_event=1, end_event=5)
 
 features = analysis.extract_features(max_event_per_sample=None)  # 每样本可限制提取前N个事件；None表示全部
-filtered = analysis.filter_events(method="blockade_gmm", parameters={"n_components": 2, "prior_mean": None}, blockage_lim=(0.1, 1.0))
+analysis.filter_events(method="blockade_gmm", parameters={"n_components": 2, "prior_mean": None}, blockage_lim=(0.1, 1.0))
 best_pkg = analysis.build_best_model(cv=10, scoring="accuracy")
 analysis.pl.model_cm(model_name=best_pkg["best_model"], split="test")
 analysis.pl.model_metric_bar(metric="accuracy", split="test")
@@ -81,7 +81,7 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 > `extract_features` 中 `delta_i` 与 `blockade_ratio` 会根据 `detect_direction` 做方向一致化计算（`up` 使用负号展开形式）。
 > `filter_events` 通过 `method + parameters` 配置不同过滤方法；默认 `blockade_gmm`，默认参数为 `n_components=2, prior_mean=None`。
 > `isolation_forest` / `lof` 默认使用特征：`duration_s`、`blockade_ratio`、`segment_skew`、`segment_kurt`。
-> `blockage_lim` 默认为 `(0.1, 1.0)`，作为质量标签判定的必备阻塞率范围条件；`filter_events` 返回完整表（含 `quality_tag`），而 `analysis.filtered_df` 仅保留 `valid` 事件。
+> `blockage_lim` 默认为 `(0.1, 1.0)`，会先作为硬阈值过滤事件；`filter_events` 会在 `analysis.feature_df` 内新增 `quality_tag`，并将 `analysis.filtered_df` 仅保留 `valid` 事件。
 > 提供 `detect_events_simple` 便于在局部时间窗口做初步方法选择与参数调整。
 > `detect_events_simple` 的结果会保存到 `analysis.detect_events_simple_object`（并兼容 `analysis.simple_events`）。
 > `detect_events` / `detect_events_simple` 会按样本显示进度条（若环境安装了 `tqdm`）。
