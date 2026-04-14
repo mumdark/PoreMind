@@ -75,6 +75,7 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 > 基线支持 `baseline_method="global_quantile"`，并通过 `baseline_params={"q": xx}` 指定全局分位数（默认 `q=0.5`，即全局中位值）。
 > 支持事件合并：`merge_event=True` + `merge_event_params={"merge_gap_ms": xx}` 可合并时间间隔不超过 `xx` ms 的临近事件。
 > 默认 `min_duration_s=0`；`rolling_quantile` 默认参数为 `window=10000, q=0.5`。
+> 默认噪声尺度估计为 `noise_method="mad"`（可切换为 `std`）。
 > 提供 `detect_events_simple` 便于在局部时间窗口做初步方法选择与参数调整。
 > `detect_events_simple` 的结果会保存到 `analysis.detect_events_simple_object`（并兼容 `analysis.simple_events`）。
 > `detect_events` / `detect_events_simple` 会按样本显示进度条（若环境安装了 `tqdm`）。

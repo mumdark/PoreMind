@@ -268,6 +268,17 @@ class MultiSampleAnalysis:
         return Event(start_idx=start_idx, end_idx=end_idx, baseline_local=baseline_local, delta_i=delta_i, dwell_time_s=dwell, snr=snr)
 
     @staticmethod
+    def _noise_scale(residual: np.ndarray, method: str = "mad") -> float:
+        method = method.lower()
+        if method == "mad":
+            med = float(np.median(residual))
+            mad = float(np.median(np.abs(residual - med)))
+            return 1.4826 * mad + 1e-12
+        if method == "std":
+            return float(np.std(residual)) + 1e-12
+        raise ValueError("noise_method must be 'mad' or 'std'")
+
+    @staticmethod
     def _detect_events_by_method(
         signal: np.ndarray,
         baseline: np.ndarray,
@@ -286,12 +297,15 @@ class MultiSampleAnalysis:
                 return detect_events_threshold(signal, baseline, sampling_rate_hz, **detect_params)
             sigma_k = float(detect_params.get("sigma_k", 5.0))
             min_duration_s = float(detect_params.get("min_duration_s", 0.0))
+            noise_method = str(detect_params.get("noise_method", "mad"))
             residual = signal - baseline
-            sigma = float(np.std(residual)) + 1e-12
+            sigma = MultiSampleAnalysis._noise_scale(residual, method=noise_method)
             mask = residual > sigma_k * sigma
             return MultiSampleAnalysis._mask_to_events(mask, baseline, signal, sampling_rate_hz, min_duration_s=min_duration_s)
         if detect_method == "zscore_threshold":
-            z = (signal - baseline) / (np.std(signal - baseline) + 1e-12)
+            residual = signal - baseline
+            noise_method = str(detect_params.get("noise_method", "mad"))
+            z = residual / MultiSampleAnalysis._noise_scale(residual, method=noise_method)
             z_thr = float(detect_params.get("z", 4.0))
             min_duration_s = float(detect_params.get("min_duration_s", 0.0))
             mask = z < -z_thr if detect_direction == "down" else z > z_thr
@@ -399,10 +413,10 @@ class MultiSampleAnalysis:
     @staticmethod
     def _default_detect_params(detect_method: str) -> dict[str, Any]:
         defaults = {
-            "threshold": {"sigma_k": 5.0, "min_duration_s": 0.0},
-            "zscore_threshold": {"z": 4.0, "min_duration_s": 0.0},
-            "cusum": {"drift": 0.02, "threshold": 8.0, "min_duration_s": 0.0},
-            "pelt": {"model": "l2", "penalty": 8.0, "sigma_k": 3.0, "min_duration_s": 0.0},
+            "threshold": {"sigma_k": 5.0, "min_duration_s": 0.0, "noise_method": "mad"},
+            "zscore_threshold": {"z": 4.0, "min_duration_s": 0.0, "noise_method": "mad"},
+            "cusum": {"drift": 0.02, "threshold": 8.0, "min_duration_s": 0.0, "noise_method": "mad"},
+            "pelt": {"model": "l2", "penalty": 8.0, "sigma_k": 3.0, "min_duration_s": 0.0, "noise_method": "mad"},
             "hmm": {"n_components": 2, "covariance_type": "diag", "n_iter": 200, "min_duration_s": 0.0},
         }
         if detect_method not in defaults:

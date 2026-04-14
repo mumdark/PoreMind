@@ -5,7 +5,7 @@ Run event detection only on a selected time window for quick method selection an
 
 ## Parameters
 - `detect_method` (`str`): Detection method: threshold, zscore_threshold, cusum, pelt, hmm.
-- `detect_params` (`dict[str, Any] | None`): Method-specific parameters. Uses defaults when None.
+- `detect_params` (`dict[str, Any] | None`): Method-specific parameters. Uses defaults when None. Methods using noise scale support `noise_method` (`mad` default, or `std`).
 - `baseline_method` (`str`): Baseline estimator method.
 - `baseline_params` (`dict[str, Any] | None`): Baseline parameters. For `rolling_quantile`, defaults to `{"window": 10000, "q": 0.5}`. For `global_quantile`, pass `{"q": xx}` (default `0.5`, i.e., global median).
 - `sample_id` (`str | None`): Target trace id. None means run for all loaded traces.

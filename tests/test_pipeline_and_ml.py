@@ -73,6 +73,7 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         detect_direction="up",
         baseline_method="global_quantile",
         baseline_params={"q": 0.5},
+        detect_params={"sigma_k": 3.0, "min_duration_s": 0.0, "noise_method": "std"},
         merge_event=True,
         merge_event_params={"merge_gap_ms": 0.2},
     )

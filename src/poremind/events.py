@@ -6,6 +6,17 @@ from typing import List
 import numpy as np
 
 
+def _noise_scale(residual: np.ndarray, method: str = "mad") -> float:
+    method = method.lower()
+    if method == "mad":
+        med = float(np.median(residual))
+        mad = float(np.median(np.abs(residual - med)))
+        return 1.4826 * mad + 1e-12
+    if method == "std":
+        return float(np.std(residual)) + 1e-12
+    raise ValueError("noise_method must be 'mad' or 'std'")
+
+
 @dataclass
 class Event:
     start_idx: int
@@ -62,9 +73,10 @@ def detect_events_threshold(
     sampling_rate_hz: float,
     sigma_k: float = 5.0,
     min_duration_s: float = 0.0002,
+    noise_method: str = "mad",
 ) -> List[Event]:
     residual = signal - baseline
-    sigma = float(np.std(residual)) + 1e-12
+    sigma = _noise_scale(residual, method=noise_method)
     threshold = -sigma_k * sigma
     mask = residual < threshold
     return _mask_to_events(mask, baseline, signal, sampling_rate_hz, min_duration_s)
@@ -77,10 +89,11 @@ def detect_events_cusum(
     drift: float = 0.02,
     threshold: float = 8.0,
     min_duration_s: float = 0.0002,
+    noise_method: str = "mad",
 ) -> List[Event]:
     """One-sided CUSUM on standardized residual for blockade-like (negative) events."""
     residual = signal - baseline
-    sigma = float(np.std(residual)) + 1e-12
+    sigma = _noise_scale(residual, method=noise_method)
     z = residual / sigma
 
     s_neg = np.zeros_like(z)
@@ -98,6 +111,7 @@ def detect_events_pelt(
     penalty: float = 8.0,
     sigma_k: float = 3.0,
     min_duration_s: float = 0.0002,
+    noise_method: str = "mad",
 ) -> List[Event]:
     """PELT change-point segmentation + residual thresholding within segments."""
     try:
@@ -111,7 +125,7 @@ def detect_events_pelt(
 
     mask = np.zeros_like(signal, dtype=bool)
     start = 0
-    sigma = float(np.std(residual)) + 1e-12
+    sigma = _noise_scale(residual, method=noise_method)
     thr = -abs(sigma_k) * sigma
     for end in bkps:
         seg = residual[start:end]

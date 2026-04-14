@@ -6,7 +6,7 @@ For fast local tuning on a bounded time window, see `detect_events_simple`.
 
 ## Parameters
 - `detect_method` (`str`): Detection method: threshold, zscore_threshold, cusum, pelt, hmm.
-- `detect_params` (`dict[str, Any] | None`): Method-specific detection parameters. If None, defaults are used.
+- `detect_params` (`dict[str, Any] | None`): Method-specific detection parameters. If None, defaults are used. Methods using noise scale support `noise_method` (`mad` default, or `std`).
 - `detect_direction` (`str`): Event polarity, `down` (default) or `up`.
 - `merge_event` (`bool`): Whether to merge adjacent events (default `False`).
 - `merge_event_params` (`dict[str, Any] | None`): Merge parameters. Use `{"merge_gap_ms": xx}` to merge events when the gap is within `xx` ms.
