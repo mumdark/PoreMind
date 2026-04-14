@@ -6,7 +6,11 @@ from typing import List
 import numpy as np
 
 
-def _noise_scale(residual: np.ndarray, method: str = "mad") -> float:
+def _noise_scale(residual: np.ndarray, method: str = "mad", stats_mask: np.ndarray | None = None) -> float:
+    if stats_mask is not None:
+        residual = residual[stats_mask]
+    if len(residual) <= 1:
+        raise ValueError("effective points for noise estimation must be > 1 after exclude_current filtering")
     method = method.lower()
     if method == "mad":
         med = float(np.median(residual))
@@ -74,9 +78,10 @@ def detect_events_threshold(
     sigma_k: float = 5.0,
     min_duration_s: float = 0.0002,
     noise_method: str = "mad",
+    stats_mask: np.ndarray | None = None,
 ) -> List[Event]:
     residual = signal - baseline
-    sigma = _noise_scale(residual, method=noise_method)
+    sigma = _noise_scale(residual, method=noise_method, stats_mask=stats_mask)
     threshold = -sigma_k * sigma
     mask = residual < threshold
     return _mask_to_events(mask, baseline, signal, sampling_rate_hz, min_duration_s)
@@ -90,10 +95,11 @@ def detect_events_cusum(
     threshold: float = 8.0,
     min_duration_s: float = 0.0002,
     noise_method: str = "mad",
+    stats_mask: np.ndarray | None = None,
 ) -> List[Event]:
     """One-sided CUSUM on standardized residual for blockade-like (negative) events."""
     residual = signal - baseline
-    sigma = _noise_scale(residual, method=noise_method)
+    sigma = _noise_scale(residual, method=noise_method, stats_mask=stats_mask)
     z = residual / sigma
 
     s_neg = np.zeros_like(z)
@@ -112,6 +118,7 @@ def detect_events_pelt(
     sigma_k: float = 3.0,
     min_duration_s: float = 0.0002,
     noise_method: str = "mad",
+    stats_mask: np.ndarray | None = None,
 ) -> List[Event]:
     """PELT change-point segmentation + residual thresholding within segments."""
     try:
@@ -125,7 +132,7 @@ def detect_events_pelt(
 
     mask = np.zeros_like(signal, dtype=bool)
     start = 0
-    sigma = _noise_scale(residual, method=noise_method)
+    sigma = _noise_scale(residual, method=noise_method, stats_mask=stats_mask)
     thr = -abs(sigma_k) * sigma
     for end in bkps:
         seg = residual[start:end]

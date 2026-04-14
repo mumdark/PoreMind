@@ -43,6 +43,7 @@ analysis.detect_events(detect_method="threshold")  # 可选: threshold / zscore_
 # 可选方向：detect_direction="down"（默认）或 "up"
 # 可选基线：baseline_method="global_quantile", baseline_params={"q": 0.5}
 # 可选事件合并：merge_event=True, merge_event_params={"merge_gap_ms": 0.2}
+# 可选统计电流过滤：exclude_current=True, exclude_current_params={"min": 0, "max": None}
 
 # 仅在局部时间窗口快速调参（默认 0-1000 ms）
 simple_events = analysis.detect_events_simple(
@@ -76,6 +77,7 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 > 支持事件合并：`merge_event=True` + `merge_event_params={"merge_gap_ms": xx}` 可合并时间间隔不超过 `xx` ms 的临近事件。
 > 默认 `min_duration_s=0`；`rolling_quantile` 默认参数为 `window=10000, q=0.5`。
 > 默认噪声尺度估计为 `noise_method="mad"`（可切换为 `std`）。
+> 默认启用 `exclude_current=True`：`up` 方向默认统计区间 `(-inf, 0)`；`down` 方向默认统计区间 `(0, +inf)`；若过滤后有效点 `<=1` 会直接报错。
 > 提供 `detect_events_simple` 便于在局部时间窗口做初步方法选择与参数调整。
 > `detect_events_simple` 的结果会保存到 `analysis.detect_events_simple_object`（并兼容 `analysis.simple_events`）。
 > `detect_events` / `detect_events_simple` 会按样本显示进度条（若环境安装了 `tqdm`）。

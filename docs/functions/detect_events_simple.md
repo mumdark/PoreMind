@@ -13,6 +13,8 @@ Run event detection only on a selected time window for quick method selection an
 - `start_ms` (`float`): Window start time in milliseconds. Default `0.0`.
 - `end_ms` (`float`): Window end time in milliseconds. Default `1000.0`.
 - `detect_direction` (`str`): Event polarity, `down` (default) or `up`.
+- `exclude_current` (`bool`): Whether to exclude current outside a range when computing baseline/noise statistics. Default `True`.
+- `exclude_current_params` (`dict[str, Any] | None`): Current filter bounds for statistics. Use `{"min": xx, "max": yy}`. Defaults by direction: `up -> {"min": None, "max": 0}`, `down -> {"min": 0, "max": None}`.
 - `merge_event` (`bool`): Whether to merge adjacent events (default `False`).
 - `merge_event_params` (`dict[str, Any] | None`): Merge parameters. Use `{"merge_gap_ms": xx}` to merge events when the gap is within `xx` ms.
 
@@ -23,3 +25,4 @@ Run event detection only on a selected time window for quick method selection an
 - Writes results to `analysis.detect_events_simple_object` (primary store for plotting with `event_current_simple`).
 - Also keeps backward-compatible mirror in `analysis.simple_events`.
 - Displays per-sample progress with a progress bar when `tqdm` is available.
+- If filtered effective points are `<=1`, detection raises `ValueError` directly (no fallback).

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from poremind import __version__, create_analysis_object
 
@@ -45,6 +46,7 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         detect_params={"sigma_k": 3.5, "min_duration_s": 0.001},
         baseline_method="rolling_quantile",
         baseline_params={"window": 201, "q": 0.5},
+        exclude_current=False,
     )
 
     feat_df = analysis.extract_features()
@@ -77,6 +79,20 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         merge_event=True,
         merge_event_params={"merge_gap_ms": 0.2},
     )
+    _ = analysis.detect_events_simple(
+        sample_id="A1",
+        current="raw",
+        detect_method="threshold",
+        exclude_current=False,
+    )
+    with pytest.raises(ValueError):
+        analysis.detect_events_simple(
+            sample_id="A1",
+            current="raw",
+            detect_method="threshold",
+            exclude_current=True,
+            exclude_current_params={"min": 1e9, "max": None},
+        )
 
     pkg = analysis.build_best_model(cv=2, scoring="accuracy")
     assert "best_model" in pkg

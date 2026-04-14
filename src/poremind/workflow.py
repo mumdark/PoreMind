@@ -132,6 +132,8 @@ class MultiSampleAnalysis:
         detect_direction: str = "down",
         merge_event: bool = False,
         merge_event_params: dict[str, Any] | None = None,
+        exclude_current: bool = True,
+        exclude_current_params: dict[str, Any] | None = None,
     ) -> "MultiSampleAnalysis":
         if not self.denoised:
             self.denoise()
@@ -146,6 +148,8 @@ class MultiSampleAnalysis:
             "detect_direction": detect_direction,
             "merge_event": merge_event,
             "merge_event_params": merge_event_params or {"merge_gap_ms": 0.0},
+            "exclude_current": exclude_current,
+            "exclude_current_params": exclude_current_params,
         }
 
         self.baselines = {}
@@ -163,7 +167,13 @@ class MultiSampleAnalysis:
             if hasattr(iterator, "set_postfix_str"):
                 iterator.set_postfix_str(str(sid))
             sig = self.denoised[sid]
-            baseline = self._estimate_baseline(sig, method=baseline_method, baseline_params=baseline_params)
+            stats_mask = self._build_stats_mask(
+                signal=sig,
+                detect_direction=detect_direction,
+                exclude_current=exclude_current,
+                exclude_current_params=exclude_current_params,
+            )
+            baseline = self._estimate_baseline(sig, method=baseline_method, baseline_params=baseline_params, stats_mask=stats_mask)
             self.baselines[sid] = baseline
             evts = self._detect_events_by_method(
                 sig,
@@ -172,6 +182,7 @@ class MultiSampleAnalysis:
                 detect_method=detect_method,
                 detect_params=detect_params,
                 detect_direction=detect_direction,
+                stats_mask=stats_mask,
             )
             if merge_event:
                 evts = self._merge_nearby_events(
@@ -185,11 +196,65 @@ class MultiSampleAnalysis:
         return self
 
     @staticmethod
-    def _estimate_baseline(signal: np.ndarray, method: str, baseline_params: dict[str, Any]) -> np.ndarray:
+    def _build_stats_mask(
+        signal: np.ndarray,
+        detect_direction: str,
+        exclude_current: bool,
+        exclude_current_params: dict[str, Any] | None,
+    ) -> np.ndarray:
+        if not exclude_current:
+            return np.ones(len(signal), dtype=bool)
+        params = (exclude_current_params or {}).copy()
+        if "min" not in params and "max" not in params:
+            if detect_direction == "up":
+                params = {"min": None, "max": 0.0}
+            else:
+                params = {"min": 0.0, "max": None}
+
+        lo = params.get("min")
+        hi = params.get("max")
+        mask = np.ones(len(signal), dtype=bool)
+        if lo is not None:
+            mask &= signal > float(lo)
+        if hi is not None:
+            mask &= signal < float(hi)
+        if int(mask.sum()) <= 1:
+            raise ValueError("effective points for baseline/noise statistics must be > 1 after exclude_current filtering")
+        return mask
+
+    @staticmethod
+    def _estimate_baseline(signal: np.ndarray, method: str, baseline_params: dict[str, Any], stats_mask: np.ndarray) -> np.ndarray:
         if method == "global_quantile":
             q = float(baseline_params.get("q", 0.5))
-            val = float(np.quantile(signal, q))
+            valid = signal[stats_mask]
+            if len(valid) <= 1:
+                raise ValueError("effective points for global_quantile baseline must be > 1 after exclude_current filtering")
+            val = float(np.quantile(valid, q))
             return np.full_like(signal, val, dtype=float)
+        if method == "rolling_quantile":
+            window = int(baseline_params.get("window", 10000))
+            q = float(baseline_params.get("q", 0.5))
+            if window <= 1:
+                valid = signal[stats_mask]
+                if len(valid) <= 1:
+                    raise ValueError("effective points for rolling_quantile baseline must be > 1 after exclude_current filtering")
+                val = float(np.quantile(valid, q))
+                return np.full_like(signal, val, dtype=float)
+            half = window // 2
+            out = np.empty_like(signal, dtype=float)
+            for i in range(len(signal)):
+                lo = max(0, i - half)
+                hi = min(len(signal), i + half + 1)
+                local_mask = stats_mask[lo:hi]
+                if int(local_mask.sum()) <= 1:
+                    raise ValueError("rolling_quantile window has <=1 effective points after exclude_current filtering")
+                out[i] = np.quantile(signal[lo:hi][local_mask], q)
+            return out
+        if method == "global_median":
+            valid = signal[stats_mask]
+            if len(valid) <= 1:
+                raise ValueError("effective points for global_median baseline must be > 1 after exclude_current filtering")
+            return np.full_like(signal, float(np.median(valid)), dtype=float)
         return estimate_baseline(signal, method=method, **baseline_params)
 
     @staticmethod
@@ -268,7 +333,11 @@ class MultiSampleAnalysis:
         return Event(start_idx=start_idx, end_idx=end_idx, baseline_local=baseline_local, delta_i=delta_i, dwell_time_s=dwell, snr=snr)
 
     @staticmethod
-    def _noise_scale(residual: np.ndarray, method: str = "mad") -> float:
+    def _noise_scale(residual: np.ndarray, method: str = "mad", stats_mask: np.ndarray | None = None) -> float:
+        if stats_mask is not None:
+            residual = residual[stats_mask]
+        if len(residual) <= 1:
+            raise ValueError("effective points for noise estimation must be > 1 after exclude_current filtering")
         method = method.lower()
         if method == "mad":
             med = float(np.median(residual))
@@ -286,6 +355,7 @@ class MultiSampleAnalysis:
         detect_method: str,
         detect_params: dict[str, Any],
         detect_direction: str = "down",
+        stats_mask: np.ndarray | None = None,
     ) -> list[Event]:
         if detect_direction not in {"down", "up"}:
             raise ValueError("detect_direction must be 'down' or 'up'")
@@ -294,26 +364,26 @@ class MultiSampleAnalysis:
 
         if detect_method == "threshold":
             if detect_direction == "down":
-                return detect_events_threshold(signal, baseline, sampling_rate_hz, **detect_params)
+                return detect_events_threshold(signal, baseline, sampling_rate_hz, stats_mask=stats_mask, **detect_params)
             sigma_k = float(detect_params.get("sigma_k", 5.0))
             min_duration_s = float(detect_params.get("min_duration_s", 0.0))
             noise_method = str(detect_params.get("noise_method", "mad"))
             residual = signal - baseline
-            sigma = MultiSampleAnalysis._noise_scale(residual, method=noise_method)
+            sigma = MultiSampleAnalysis._noise_scale(residual, method=noise_method, stats_mask=stats_mask)
             mask = residual > sigma_k * sigma
             return MultiSampleAnalysis._mask_to_events(mask, baseline, signal, sampling_rate_hz, min_duration_s=min_duration_s)
         if detect_method == "zscore_threshold":
             residual = signal - baseline
             noise_method = str(detect_params.get("noise_method", "mad"))
-            z = residual / MultiSampleAnalysis._noise_scale(residual, method=noise_method)
+            z = residual / MultiSampleAnalysis._noise_scale(residual, method=noise_method, stats_mask=stats_mask)
             z_thr = float(detect_params.get("z", 4.0))
             min_duration_s = float(detect_params.get("min_duration_s", 0.0))
             mask = z < -z_thr if detect_direction == "down" else z > z_thr
             return MultiSampleAnalysis._mask_to_events(mask, baseline, signal, sampling_rate_hz, min_duration_s=min_duration_s)
         if detect_method == "cusum":
-            return detect_events_cusum(work_signal, work_baseline, sampling_rate_hz, **detect_params)
+            return detect_events_cusum(work_signal, work_baseline, sampling_rate_hz, stats_mask=stats_mask, **detect_params)
         if detect_method == "pelt":
-            return detect_events_pelt(work_signal, work_baseline, sampling_rate_hz, **detect_params)
+            return detect_events_pelt(work_signal, work_baseline, sampling_rate_hz, stats_mask=stats_mask, **detect_params)
         if detect_method == "hmm":
             return detect_events_hmm(work_signal, work_baseline, sampling_rate_hz, **detect_params)
         raise ValueError("unsupported detect method")
@@ -331,6 +401,8 @@ class MultiSampleAnalysis:
         detect_direction: str = "down",
         merge_event: bool = False,
         merge_event_params: dict[str, Any] | None = None,
+        exclude_current: bool = True,
+        exclude_current_params: dict[str, Any] | None = None,
     ) -> dict[str, list[Event]]:
         if not self.traces:
             self.load()
@@ -354,6 +426,8 @@ class MultiSampleAnalysis:
             "detect_direction": detect_direction,
             "merge_event": merge_event,
             "merge_event_params": merge_event_params or {"merge_gap_ms": 0.0},
+            "exclude_current": exclude_current,
+            "exclude_current_params": exclude_current_params,
         }
 
         target_ids = [sample_id] if sample_id is not None else list(self.traces.keys())
@@ -378,7 +452,13 @@ class MultiSampleAnalysis:
                 continue
             lo, hi = int(idx[0]), int(idx[-1]) + 1
             sig = sig_full[lo:hi]
-            baseline = self._estimate_baseline(sig, method=baseline_method, baseline_params=baseline_params)
+            stats_mask = self._build_stats_mask(
+                signal=sig,
+                detect_direction=detect_direction,
+                exclude_current=exclude_current,
+                exclude_current_params=exclude_current_params,
+            )
+            baseline = self._estimate_baseline(sig, method=baseline_method, baseline_params=baseline_params, stats_mask=stats_mask)
             evts_local = self._detect_events_by_method(
                 sig,
                 baseline,
@@ -386,6 +466,7 @@ class MultiSampleAnalysis:
                 detect_method=detect_method,
                 detect_params=detect_params,
                 detect_direction=detect_direction,
+                stats_mask=stats_mask,
             )
             if merge_event:
                 evts_local = self._merge_nearby_events(
