@@ -59,7 +59,7 @@ analysis.pl.current(sample_id=None, current="denoise", start_ms=0.0, end_ms=1.0,
 analysis.plot.event_current_simple(sample_id=None, current="denoise", start_event=1, end_event=5)
 analysis.plot.event_current(sample_id=None, current="denoise", start_event=1, end_event=5)
 
-features = analysis.extract_features()  # 含 segment_skew / segment_kurt / peak_factor 等特征
+features = analysis.extract_features(max_event_per_sample=None)  # 每样本可限制提取前N个事件；None表示全部
 filtered = analysis.filter_events()  # 默认 blockade_gmm(基于 blockade_ratio 单特征)
 best_pkg = analysis.build_best_model(cv=10, scoring="accuracy")
 analysis.pl.model_cm(model_name=best_pkg["best_model"], split="test")

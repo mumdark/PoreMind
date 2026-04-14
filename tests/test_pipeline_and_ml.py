@@ -52,6 +52,12 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     feat_df = analysis.extract_features()
     assert len(feat_df) > 0
     assert {"left_baseline", "right_baseline", "blockade_ratio", "channel", "sweep", "sample_id", "segment_skew", "segment_kurt", "peak_factor"}.issubset(feat_df.columns)
+    feat_limited = analysis.extract_features(max_event_per_sample=1)
+    assert feat_limited.groupby("trace_id").size().max() <= 1
+    with pytest.raises(ValueError):
+        analysis.extract_features(max_event_per_sample=0)
+    feat_df = analysis.extract_features()
+    assert len(feat_df) > 0
 
     filtered = analysis.filter_events()
     assert "quality_tag" in filtered.columns
