@@ -154,6 +154,9 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     pkg = analysis.build_best_model(cv=2, scoring="accuracy")
     assert "best_model" in pkg
     assert pkg["best_model"] in analysis.model_cv_results
+    assert {"duration_s", "blockade_ratio", "segment_std", "segment_skew", "segment_kurt"} == set(pkg["feature_cols"])
+    assert "all_samples_feature_pred" in pkg
+    assert "best_model_pred" in pkg["all_samples_feature_pred"].columns
     try:
         _ = analysis.pl.model_metric_bar(metric="accuracy", split="test")
         _ = analysis.pl.model_cm(model_name=pkg["best_model"], split="test")

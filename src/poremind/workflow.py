@@ -941,12 +941,13 @@ class MultiSampleAnalysis:
             "test_recall_weighted": wavg("test_recall", test_total, "test_n"),
             "average_mode": cfg["mode"],
         }
-        return {"folds": folds, "aggregate": agg}
+        return {"folds": folds, "aggregate": agg, "labels": all_labels}
 
     def build_best_model(
         self,
         models: dict[str, Any] | None = None,
         label_col: str = "label",
+        feature_cols: list[str] | None = None,
         cv: int = 10,
         scoring: str = "accuracy",
         exclude_noise: bool = True,
@@ -960,7 +961,11 @@ class MultiSampleAnalysis:
         if label_col not in df.columns:
             raise ValueError("label column missing, provide sample_to_group at init or add labels manually")
 
-        feature_cols = [c for c in select_feature_columns(df) if c not in {"is_noise"}]
+        default_feature_cols = ["duration_s", "blockade_ratio", "segment_std", "segment_skew", "segment_kurt"]
+        feature_cols = list(feature_cols) if feature_cols is not None else default_feature_cols
+        missing = [c for c in feature_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"feature columns missing in dataframe: {missing}")
         X = df[feature_cols].fillna(0.0)
         y = df[label_col]
 
@@ -1006,12 +1011,22 @@ class MultiSampleAnalysis:
         if best_estimator is None or best_name is None:
             raise RuntimeError("all candidate models failed during CV; check labels/class balance")
         best_estimator.fit(X, y)
+        all_feature_df = self.feature_df.copy() if self.feature_df is not None else df.copy()
+        all_X = all_feature_df[feature_cols].fillna(0.0)
+        all_pred = best_estimator.predict(all_X)
+        summary_cols = []
+        for c in ["trace_id", "sample_id", label_col]:
+            if c in all_feature_df.columns:
+                summary_cols.append(c)
+        all_samples_feature_pred = all_feature_df[summary_cols + feature_cols].copy()
+        all_samples_feature_pred["best_model_pred"] = all_pred
         self.best_model_package = {
             "model": best_estimator,
             "feature_cols": feature_cols,
             "scores": scores,
             "best_model": best_name,
             "cv_results": self.model_cv_results,
+            "all_samples_feature_pred": all_samples_feature_pred,
             "preprocess_state": self.preprocess_state,
             "detect_state": self.detect_state,
             "feature_state": self.feature_state,
