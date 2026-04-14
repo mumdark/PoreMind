@@ -47,6 +47,8 @@ class MultiSampleAnalysis:
     denoised: dict[str, np.ndarray] = field(default_factory=dict)
     baselines: dict[str, np.ndarray] = field(default_factory=dict)
     events: dict[str, list[Event]] = field(default_factory=dict)
+    simple_events: dict[str, list[Event]] = field(default_factory=dict)
+    detect_events_simple_object: dict[str, list[Event]] = field(default_factory=dict)
     feature_df: pd.DataFrame | None = None
     filtered_df: pd.DataFrame | None = None
     best_model_package: dict[str, Any] | None = None
@@ -54,12 +56,15 @@ class MultiSampleAnalysis:
 
     preprocess_state: dict[str, Any] = field(default_factory=dict)
     detect_state: dict[str, Any] = field(default_factory=dict)
+    simple_detect_state: dict[str, Any] = field(default_factory=dict)
     feature_state: dict[str, Any] = field(default_factory=dict)
     trace_to_sample: dict[str, str] = field(default_factory=dict)
     pl: PlotAccessor = field(init=False)
+    plot: PlotAccessor = field(init=False)
 
     def __post_init__(self) -> None:
         self.pl = PlotAccessor(self)
+        self.plot = self.pl
 
     def load(self) -> "MultiSampleAnalysis":
         self.traces = {}
@@ -124,51 +129,295 @@ class MultiSampleAnalysis:
         detect_params: dict[str, Any] | None = None,
         baseline_method: str = "rolling_quantile",
         baseline_params: dict[str, Any] | None = None,
+        detect_direction: str = "down",
+        merge_event: bool = False,
+        merge_event_params: dict[str, Any] | None = None,
     ) -> "MultiSampleAnalysis":
         if not self.denoised:
             self.denoise()
         if detect_params is None:
             detect_params = self._default_detect_params(detect_method)
-        baseline_params = baseline_params or {"window": 501, "q": 0.5}
+        baseline_params = baseline_params or {"window": 10000, "q": 0.5}
         self.detect_state = {
             "detect_method": detect_method,
             "detect_params": detect_params,
             "baseline_method": baseline_method,
             "baseline_params": baseline_params,
+            "detect_direction": detect_direction,
+            "merge_event": merge_event,
+            "merge_event_params": merge_event_params or {"merge_gap_ms": 0.0},
         }
 
         self.baselines = {}
         self.events = {}
-        for sid, tr in self.traces.items():
+        trace_items = list(self.traces.items())
+        iterator = trace_items
+        try:
+            from tqdm.auto import tqdm  # type: ignore
+
+            iterator = tqdm(trace_items, desc="detect_events", unit="sample")
+        except Exception:
+            iterator = trace_items
+
+        for sid, tr in iterator:
+            if hasattr(iterator, "set_postfix_str"):
+                iterator.set_postfix_str(str(sid))
             sig = self.denoised[sid]
-            baseline = estimate_baseline(sig, method=baseline_method, **baseline_params)
+            baseline = self._estimate_baseline(sig, method=baseline_method, baseline_params=baseline_params)
             self.baselines[sid] = baseline
-            if detect_method == "threshold":
-                evts = detect_events_threshold(sig, baseline, tr.sampling_rate_hz, **detect_params)
-            elif detect_method == "zscore_threshold":
-                z = (sig - baseline) / (np.std(sig - baseline) + 1e-12)
-                thr = -float(detect_params.get("z", 4.0))
-                mask = z < thr
-                evts = self._mask_to_events(mask, baseline, sig, tr.sampling_rate_hz, min_duration_s=float(detect_params.get("min_duration_s", 2e-4)))
-            elif detect_method == "cusum":
-                evts = detect_events_cusum(sig, baseline, tr.sampling_rate_hz, **detect_params)
-            elif detect_method == "pelt":
-                evts = detect_events_pelt(sig, baseline, tr.sampling_rate_hz, **detect_params)
-            elif detect_method == "hmm":
-                evts = detect_events_hmm(sig, baseline, tr.sampling_rate_hz, **detect_params)
-            else:
-                raise ValueError("unsupported detect method")
+            evts = self._detect_events_by_method(
+                sig,
+                baseline,
+                tr.sampling_rate_hz,
+                detect_method=detect_method,
+                detect_params=detect_params,
+                detect_direction=detect_direction,
+            )
+            if merge_event:
+                evts = self._merge_nearby_events(
+                    evts,
+                    signal=sig,
+                    baseline=baseline,
+                    sampling_rate_hz=tr.sampling_rate_hz,
+                    merge_gap_ms=float((merge_event_params or {"merge_gap_ms": 0.0}).get("merge_gap_ms", 0.0)),
+                )
             self.events[sid] = evts
         return self
 
     @staticmethod
+    def _estimate_baseline(signal: np.ndarray, method: str, baseline_params: dict[str, Any]) -> np.ndarray:
+        if method == "global_quantile":
+            q = float(baseline_params.get("q", 0.5))
+            val = float(np.quantile(signal, q))
+            return np.full_like(signal, val, dtype=float)
+        return estimate_baseline(signal, method=method, **baseline_params)
+
+    @staticmethod
+    def _merge_nearby_events(
+        events: list[Event],
+        signal: np.ndarray,
+        baseline: np.ndarray,
+        sampling_rate_hz: float,
+        merge_gap_ms: float,
+    ) -> list[Event]:
+        if len(events) <= 1:
+            return events
+        sigma = float(np.std(signal - baseline)) + 1e-12
+        res = baseline - signal
+        cumsum_res = np.concatenate(([0.0], np.cumsum(res, dtype=float)))
+        cumsum_base = np.concatenate(([0.0], np.cumsum(baseline, dtype=float)))
+        gap_samples = max(0, int((merge_gap_ms / 1000.0) * sampling_rate_hz))
+        merged: list[Event] = []
+        cur_start = events[0].start_idx
+        cur_end = events[0].end_idx
+        for e in events[1:]:
+            if e.start_idx - cur_end <= gap_samples:
+                cur_end = max(cur_end, e.end_idx)
+            else:
+                merged.append(
+                    MultiSampleAnalysis._build_event(
+                        cur_start,
+                        cur_end,
+                        signal,
+                        baseline,
+                        sampling_rate_hz,
+                        sigma=sigma,
+                        cumsum_res=cumsum_res,
+                        cumsum_base=cumsum_base,
+                    )
+                )
+                cur_start, cur_end = e.start_idx, e.end_idx
+        merged.append(
+            MultiSampleAnalysis._build_event(
+                cur_start,
+                cur_end,
+                signal,
+                baseline,
+                sampling_rate_hz,
+                sigma=sigma,
+                cumsum_res=cumsum_res,
+                cumsum_base=cumsum_base,
+            )
+        )
+        return merged
+
+    @staticmethod
+    def _build_event(
+        start_idx: int,
+        end_idx: int,
+        signal: np.ndarray,
+        baseline: np.ndarray,
+        sr: float,
+        sigma: float | None = None,
+        cumsum_res: np.ndarray | None = None,
+        cumsum_base: np.ndarray | None = None,
+    ) -> Event:
+        n = max(1, end_idx - start_idx)
+        if cumsum_res is not None and cumsum_base is not None:
+            delta_i = float((cumsum_res[end_idx] - cumsum_res[start_idx]) / n)
+            baseline_local = float((cumsum_base[end_idx] - cumsum_base[start_idx]) / n)
+        else:
+            seg_signal = signal[start_idx:end_idx]
+            seg_base = baseline[start_idx:end_idx]
+            delta_i = float(np.mean(seg_base - seg_signal))
+            baseline_local = float(np.mean(seg_base))
+        dwell = (end_idx - start_idx) / sr
+        if sigma is None:
+            sigma = float(np.std(signal - baseline)) + 1e-12
+        snr = delta_i / sigma
+        return Event(start_idx=start_idx, end_idx=end_idx, baseline_local=baseline_local, delta_i=delta_i, dwell_time_s=dwell, snr=snr)
+
+    @staticmethod
+    def _noise_scale(residual: np.ndarray, method: str = "mad") -> float:
+        method = method.lower()
+        if method == "mad":
+            med = float(np.median(residual))
+            mad = float(np.median(np.abs(residual - med)))
+            return 1.4826 * mad + 1e-12
+        if method == "std":
+            return float(np.std(residual)) + 1e-12
+        raise ValueError("noise_method must be 'mad' or 'std'")
+
+    @staticmethod
+    def _detect_events_by_method(
+        signal: np.ndarray,
+        baseline: np.ndarray,
+        sampling_rate_hz: float,
+        detect_method: str,
+        detect_params: dict[str, Any],
+        detect_direction: str = "down",
+    ) -> list[Event]:
+        if detect_direction not in {"down", "up"}:
+            raise ValueError("detect_direction must be 'down' or 'up'")
+        work_signal = signal if detect_direction == "down" else -signal
+        work_baseline = baseline if detect_direction == "down" else -baseline
+
+        if detect_method == "threshold":
+            if detect_direction == "down":
+                return detect_events_threshold(signal, baseline, sampling_rate_hz, **detect_params)
+            sigma_k = float(detect_params.get("sigma_k", 5.0))
+            min_duration_s = float(detect_params.get("min_duration_s", 0.0))
+            noise_method = str(detect_params.get("noise_method", "mad"))
+            residual = signal - baseline
+            sigma = MultiSampleAnalysis._noise_scale(residual, method=noise_method)
+            mask = residual > sigma_k * sigma
+            return MultiSampleAnalysis._mask_to_events(mask, baseline, signal, sampling_rate_hz, min_duration_s=min_duration_s)
+        if detect_method == "zscore_threshold":
+            residual = signal - baseline
+            noise_method = str(detect_params.get("noise_method", "mad"))
+            z = residual / MultiSampleAnalysis._noise_scale(residual, method=noise_method)
+            z_thr = float(detect_params.get("z", 4.0))
+            min_duration_s = float(detect_params.get("min_duration_s", 0.0))
+            mask = z < -z_thr if detect_direction == "down" else z > z_thr
+            return MultiSampleAnalysis._mask_to_events(mask, baseline, signal, sampling_rate_hz, min_duration_s=min_duration_s)
+        if detect_method == "cusum":
+            return detect_events_cusum(work_signal, work_baseline, sampling_rate_hz, **detect_params)
+        if detect_method == "pelt":
+            return detect_events_pelt(work_signal, work_baseline, sampling_rate_hz, **detect_params)
+        if detect_method == "hmm":
+            return detect_events_hmm(work_signal, work_baseline, sampling_rate_hz, **detect_params)
+        raise ValueError("unsupported detect method")
+
+    def detect_events_simple(
+        self,
+        detect_method: str = "threshold",
+        detect_params: dict[str, Any] | None = None,
+        baseline_method: str = "rolling_quantile",
+        baseline_params: dict[str, Any] | None = None,
+        sample_id: str | None = None,
+        current: str = "denoise",
+        start_ms: float = 0.0,
+        end_ms: float = 1000.0,
+        detect_direction: str = "down",
+        merge_event: bool = False,
+        merge_event_params: dict[str, Any] | None = None,
+    ) -> dict[str, list[Event]]:
+        if not self.traces:
+            self.load()
+        if current not in {"denoise", "raw"}:
+            raise ValueError("current must be 'denoise' or 'raw'")
+        if current == "denoise" and not self.denoised:
+            self.denoise()
+        if detect_params is None:
+            detect_params = self._default_detect_params(detect_method)
+        baseline_params = baseline_params or {"window": 10000, "q": 0.5}
+
+        self.simple_detect_state = {
+            "detect_method": detect_method,
+            "detect_params": detect_params,
+            "baseline_method": baseline_method,
+            "baseline_params": baseline_params,
+            "sample_id": sample_id,
+            "current": current,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "detect_direction": detect_direction,
+            "merge_event": merge_event,
+            "merge_event_params": merge_event_params or {"merge_gap_ms": 0.0},
+        }
+
+        target_ids = [sample_id] if sample_id is not None else list(self.traces.keys())
+        out: dict[str, list[Event]] = {}
+        iterator = target_ids
+        try:
+            from tqdm.auto import tqdm  # type: ignore
+
+            iterator = tqdm(target_ids, desc="detect_events_simple", unit="sample")
+        except Exception:
+            iterator = target_ids
+
+        for sid in iterator:
+            if hasattr(iterator, "set_postfix_str"):
+                iterator.set_postfix_str(str(sid))
+            tr = self.traces[sid]
+            sig_full = self.denoised[sid] if current == "denoise" else tr.current
+            t_ms = tr.time * 1000.0
+            idx = np.flatnonzero((t_ms >= start_ms) & (t_ms <= end_ms))
+            if len(idx) == 0:
+                out[sid] = []
+                continue
+            lo, hi = int(idx[0]), int(idx[-1]) + 1
+            sig = sig_full[lo:hi]
+            baseline = self._estimate_baseline(sig, method=baseline_method, baseline_params=baseline_params)
+            evts_local = self._detect_events_by_method(
+                sig,
+                baseline,
+                tr.sampling_rate_hz,
+                detect_method=detect_method,
+                detect_params=detect_params,
+                detect_direction=detect_direction,
+            )
+            if merge_event:
+                evts_local = self._merge_nearby_events(
+                    evts_local,
+                    signal=sig,
+                    baseline=baseline,
+                    sampling_rate_hz=tr.sampling_rate_hz,
+                    merge_gap_ms=float((merge_event_params or {"merge_gap_ms": 0.0}).get("merge_gap_ms", 0.0)),
+                )
+            out[sid] = [
+                Event(
+                    start_idx=e.start_idx + lo,
+                    end_idx=e.end_idx + lo,
+                    baseline_local=e.baseline_local,
+                    delta_i=e.delta_i,
+                    dwell_time_s=e.dwell_time_s,
+                    snr=e.snr,
+                )
+                for e in evts_local
+            ]
+        self.simple_events = out
+        self.detect_events_simple_object = out
+        return out
+
+    @staticmethod
     def _default_detect_params(detect_method: str) -> dict[str, Any]:
         defaults = {
-            "threshold": {"sigma_k": 5.0, "min_duration_s": 2e-4},
-            "zscore_threshold": {"z": 4.0, "min_duration_s": 2e-4},
-            "cusum": {"drift": 0.02, "threshold": 8.0, "min_duration_s": 2e-4},
-            "pelt": {"model": "l2", "penalty": 8.0, "sigma_k": 3.0, "min_duration_s": 2e-4},
-            "hmm": {"n_components": 2, "covariance_type": "diag", "n_iter": 200, "min_duration_s": 2e-4},
+            "threshold": {"sigma_k": 5.0, "min_duration_s": 0.0, "noise_method": "mad"},
+            "zscore_threshold": {"z": 4.0, "min_duration_s": 0.0, "noise_method": "mad"},
+            "cusum": {"drift": 0.02, "threshold": 8.0, "min_duration_s": 0.0, "noise_method": "mad"},
+            "pelt": {"model": "l2", "penalty": 8.0, "sigma_k": 3.0, "min_duration_s": 0.0, "noise_method": "mad"},
+            "hmm": {"n_components": 2, "covariance_type": "diag", "n_iter": 200, "min_duration_s": 0.0},
         }
         if detect_method not in defaults:
             raise ValueError(f"unsupported detect method: {detect_method}")
@@ -177,24 +426,39 @@ class MultiSampleAnalysis:
     @staticmethod
     def _mask_to_events(mask: np.ndarray, baseline: np.ndarray, signal: np.ndarray, sr: float, min_duration_s: float) -> list[Event]:
         min_samples = max(1, int(min_duration_s * sr))
-        out: list[Event] = []
-        i = 0
-        n = len(mask)
         sigma = float(np.std(signal - baseline)) + 1e-12
-        while i < n:
-            if not mask[i]:
-                i += 1
-                continue
-            s = i
-            while i < n and mask[i]:
-                i += 1
-            e = i
-            if e - s < min_samples:
-                continue
-            seg_signal = signal[s:e]
-            seg_base = baseline[s:e]
-            delta_i = float(np.mean(seg_base - seg_signal))
-            out.append(Event(s, e, float(np.mean(seg_base)), delta_i, (e - s) / sr, delta_i / sigma))
+        if len(mask) == 0:
+            return []
+
+        m = mask.astype(np.int8, copy=False)
+        d = np.diff(m)
+        starts = np.flatnonzero(d == 1) + 1
+        ends = np.flatnonzero(d == -1) + 1
+        if bool(mask[0]):
+            starts = np.r_[0, starts]
+        if bool(mask[-1]):
+            ends = np.r_[ends, len(mask)]
+
+        if len(starts) == 0:
+            return []
+
+        dur = ends - starts
+        valid = dur >= min_samples
+        starts = starts[valid]
+        ends = ends[valid]
+        if len(starts) == 0:
+            return []
+
+        res = baseline - signal
+        cumsum_res = np.concatenate(([0.0], np.cumsum(res, dtype=float)))
+        cumsum_base = np.concatenate(([0.0], np.cumsum(baseline, dtype=float)))
+
+        out: list[Event] = []
+        for s, e in zip(starts.tolist(), ends.tolist()):
+            n = e - s
+            delta_i = float((cumsum_res[e] - cumsum_res[s]) / n)
+            baseline_local = float((cumsum_base[e] - cumsum_base[s]) / n)
+            out.append(Event(s, e, baseline_local, delta_i, n / sr, delta_i / sigma))
         return out
 
     # Step 3: feature extraction (built-in + custom)

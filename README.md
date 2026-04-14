@@ -40,9 +40,23 @@ analysis = create_analysis_object(
 
 analysis.denoise()  # 默认 butterworth_filtfilt
 analysis.detect_events(detect_method="threshold")  # 可选: threshold / zscore_threshold / cusum / pelt / hmm
+# 可选方向：detect_direction="down"（默认）或 "up"
+# 可选基线：baseline_method="global_quantile", baseline_params={"q": 0.5}
+# 可选事件合并：merge_event=True, merge_event_params={"merge_gap_ms": 0.2}
+
+# 仅在局部时间窗口快速调参（默认 0-1000 ms）
+simple_events = analysis.detect_events_simple(
+    sample_id=None,
+    current="denoise",
+    start_ms=0.0,
+    end_ms=1000.0,
+    detect_method="threshold",
+)
 
 # 绘图模块（pl）：默认显示 0-1 ms
 analysis.pl.current(sample_id=None, current="denoise", start_ms=0.0, end_ms=1.0, width=10, height=3)
+analysis.plot.event_current_simple(sample_id=None, current="denoise", start_event=1, end_event=5)
+analysis.plot.event_current(sample_id=None, current="denoise", start_event=1, end_event=5)
 
 features = analysis.extract_features()  # 含 segment_skew / segment_kurt / peak_factor 等特征
 filtered = analysis.filter_events()  # 默认 blockade_gmm(基于 blockade_ratio 单特征)
@@ -57,7 +71,16 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 > 说明：ABF 模式默认会遍历该文件全部 channel 与 sweep，并在事件表中输出 `channel`、`sweep` 列。
 > 默认降噪方法为 `butterworth_filtfilt`（零相位滤波，不引入相位延迟），需安装 `scipy`。
 > 事件检测支持 `threshold`、`zscore_threshold`、`cusum`、`pelt`、`hmm`，并提供默认参数。
+> 事件方向支持 `detect_direction="down"`（向下事件，默认）或 `detect_direction="up"`（向上事件）。
+> 基线支持 `baseline_method="global_quantile"`，并通过 `baseline_params={"q": xx}` 指定全局分位数（默认 `q=0.5`，即全局中位值）。
+> 支持事件合并：`merge_event=True` + `merge_event_params={"merge_gap_ms": xx}` 可合并时间间隔不超过 `xx` ms 的临近事件。
+> 默认 `min_duration_s=0`；`rolling_quantile` 默认参数为 `window=10000, q=0.5`。
+> 默认噪声尺度估计为 `noise_method="mad"`（可切换为 `std`）。
+> 提供 `detect_events_simple` 便于在局部时间窗口做初步方法选择与参数调整。
+> `detect_events_simple` 的结果会保存到 `analysis.detect_events_simple_object`（并兼容 `analysis.simple_events`）。
+> `detect_events` / `detect_events_simple` 会按样本显示进度条（若环境安装了 `tqdm`）。
 > 默认建模候选包含 RF / LR / SVM / MLP / ElasticNet / Lasso / 决策树 / LDA / AdaBoost / 高斯朴素贝叶斯。
-> 提供 `analysis.pl.plot_2d` / `analysis.pl.plot_3d`（并兼容 `getattr(analysis.pl, "2d_plot")` / `getattr(analysis.pl, "3d_plot")`）进行2D/3D特征可视化。
+> 提供 `analysis.plot` 作为 `analysis.pl` 的别名；并支持 `analysis.plot.event_current_simple` / `analysis.plot.event_current` 对事件范围进行电流可视化（红色虚线标注事件起止）。
+> 同时支持 `analysis.pl.plot_2d` / `analysis.pl.plot_3d`（并兼容 `getattr(analysis.pl, "2d_plot")` / `getattr(analysis.pl, "3d_plot")`）进行2D/3D特征可视化。
 
 完整逐步 notebook：`notebooks/step_by_step_analysis.ipynb`
