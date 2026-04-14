@@ -545,33 +545,91 @@ class MultiSampleAnalysis:
         return out
 
     # Step 3: feature extraction (built-in + custom)
-    def extract_features(self, custom_feature_fns: dict[str, FeatureFn] | None = None) -> pd.DataFrame:
+    def extract_features(
+        self,
+        custom_feature_fns: dict[str, FeatureFn] | None = None,
+        max_event_per_sample: int | None = None,
+    ) -> pd.DataFrame:
         if not self.events:
             self.detect_events()
         custom_feature_fns = custom_feature_fns or {}
+        if max_event_per_sample is not None and max_event_per_sample <= 0:
+            raise ValueError("max_event_per_sample must be > 0 or None")
         rows: list[dict[str, Any]] = []
 
-        for sid, evts in self.events.items():
+        sample_items = list(self.events.items())
+        sample_iterator = sample_items
+        detect_direction = str(self.detect_state.get("detect_direction", "down")).lower()
+        if detect_direction not in {"down", "up"}:
+            detect_direction = "down"
+        try:
+            from tqdm.auto import tqdm  # type: ignore
+
+            sample_iterator = tqdm(sample_items, desc="extract_features(samples)", unit="sample")
+        except Exception:
+            sample_iterator = sample_items
+
+        for sid, evts in sample_iterator:
+            if hasattr(sample_iterator, "set_postfix_str"):
+                sample_iterator.set_postfix_str(str(sid))
             tr = self.traces[sid]
             source_sample_id = self.trace_to_sample.get(sid, sid)
             sig = self.denoised[sid]
             base = self.baselines[sid]
-            for i, e in enumerate(evts):
+            global_base = float(np.median(base))
+            sig_len = len(sig)
+            evts_use = evts if max_event_per_sample is None else evts[:max_event_per_sample]
+
+            # prefix sums for fast window means (left/right baseline)
+            cumsum_sig = np.concatenate(([0.0], np.cumsum(sig, dtype=float)))
+
+            def _window_mean(lo: int, hi: int, fallback_idx: int) -> float:
+                if hi <= lo:
+                    return float(base[fallback_idx])
+                return float((cumsum_sig[hi] - cumsum_sig[lo]) / (hi - lo))
+
+            event_iterator = evts_use
+            try:
+                from tqdm.auto import tqdm  # type: ignore
+
+                event_iterator = tqdm(
+                    evts_use,
+                    desc=f"extract_features(events:{sid})",
+                    unit="event",
+                    leave=False,
+                )
+            except Exception:
+                event_iterator = evts_use
+
+            for i, e in enumerate(event_iterator):
+                if hasattr(event_iterator, "set_postfix_str"):
+                    event_iterator.set_postfix_str(f"event={i + 1}")
                 seg = sig[e.start_idx:e.end_idx]
-                left = sig[max(0, e.start_idx - 50):e.start_idx]
-                right = sig[e.end_idx:min(len(sig), e.end_idx + 50)]
-                left_base = float(np.mean(left)) if len(left) else float(base[e.start_idx])
-                right_base = float(np.mean(right)) if len(right) else float(base[e.end_idx - 1])
-                global_base = float(np.median(base))
-                blockade_ratio = float(e.delta_i / (abs(global_base) + 1e-12))
                 seg_mean = float(np.mean(seg))
                 seg_std = float(np.std(seg))
+                seg_min = float(np.min(seg))
+                seg_max = float(np.max(seg))
+                seg_abs_max = float(np.max(np.abs(seg)))
+
+                left_lo = max(0, e.start_idx - 50)
+                left_hi = e.start_idx
+                right_lo = e.end_idx
+                right_hi = min(sig_len, e.end_idx + 50)
+                left_base = _window_mean(left_lo, left_hi, e.start_idx)
+                right_base = _window_mean(right_lo, right_hi, e.end_idx - 1)
+
+                if detect_direction == "up":
+                    delta_i_feature = float((-global_base) - (-seg_mean))
+                    blockade_ratio = float(delta_i_feature / ((-global_base) + 1e-12))
+                else:
+                    delta_i_feature = float(global_base - seg_mean)
+                    blockade_ratio = float(delta_i_feature / (global_base + 1e-12))
                 centered = seg - seg_mean
-                denom = float(np.std(seg)) + 1e-12
+                denom = seg_std + 1e-12
                 skew = float(np.mean((centered / denom) ** 3))
                 kurt = float(np.mean((centered / denom) ** 4))
                 rms = float(np.sqrt(np.mean(seg ** 2))) + 1e-12
-                peak_factor = float(np.max(np.abs(seg)) / rms)
+                peak_factor = float(seg_abs_max / rms)
                 row = {
                     "trace_id": sid,
                     "sample_id": source_sample_id,
@@ -583,7 +641,7 @@ class MultiSampleAnalysis:
                     "start_time_s": float(tr.time[e.start_idx]),
                     "end_time_s": float(tr.time[e.end_idx - 1]),
                     "duration_s": e.dwell_time_s,
-                    "delta_i": e.delta_i,
+                    "delta_i": delta_i_feature,
                     "snr": e.snr,
                     "left_baseline": left_base,
                     "right_baseline": right_base,
@@ -591,8 +649,8 @@ class MultiSampleAnalysis:
                     "blockade_ratio": blockade_ratio,
                     "segment_mean": seg_mean,
                     "segment_std": seg_std,
-                    "segment_min": float(np.min(seg)),
-                    "segment_max": float(np.max(seg)),
+                    "segment_min": seg_min,
+                    "segment_max": seg_max,
                     "segment_skew": skew,
                     "segment_kurt": kurt,
                     "peak_factor": peak_factor,
@@ -692,37 +750,64 @@ class MultiSampleAnalysis:
         dwell_col: str = "duration_s",
         rm_index: np.ndarray | None = None,
         n_components: int = 2,
-        prior_mean: float | None = None,
+        prior_mean: float | dict[str, float] | None = None,
         visualize: bool = False,
     ) -> pd.DataFrame:
         if self.feature_df is None:
             self.extract_features()
         assert self.feature_df is not None
         df = self.feature_df.copy()
+        if len(df) == 0:
+            df["is_noise"] = []
+            df["quality_tag"] = []
+            self.filtered_df = df
+            return df
 
-        if method in {"blockade_gmm", "peak_detection"}:
-            valid_mask = self._blockade_gmm_mask(
-                df,
-                rm_index=rm_index,
-                blockade_col=blockade_col,
-                dwell_col=dwell_col,
-                n_components=n_components,
-                visualize=visualize,
-                prior_mean=prior_mean,
-            )
-            df["is_noise"] = ~valid_mask
+        group_col = "sample_id" if "sample_id" in df.columns else ("trace_id" if "trace_id" in df.columns else None)
+        if group_col is None:
+            group_slices: list[tuple[str, pd.Index]] = [("__all__", df.index)]
         else:
-            feature_cols = feature_cols or select_feature_columns(df)
-            X = df[feature_cols].fillna(0.0)
-            if method == "isolation_forest":
-                detector = IsolationForest(contamination=contamination, random_state=42)
-                pred = detector.fit_predict(X)
-            elif method == "lof":
-                detector = LocalOutlierFactor(contamination=contamination)
-                pred = detector.fit_predict(X)
+            group_slices = [(str(sample_key), idx) for sample_key, idx in df.groupby(group_col).groups.items()]
+
+        rm_series = None
+        if rm_index is not None:
+            if len(rm_index) != len(df):
+                raise ValueError("rm_index length must match feature dataframe rows")
+            rm_series = pd.Series(rm_index.astype(bool), index=df.index)
+
+        df["is_noise"] = False
+        for sample_key, idx in group_slices:
+            sub_df = df.loc[idx].copy()
+            sub_rm_index = None if rm_series is None else rm_series.loc[idx].to_numpy(dtype=bool)
+            sample_prior_mean: float | None
+            if isinstance(prior_mean, dict):
+                sample_prior_mean = prior_mean.get(sample_key)
             else:
-                raise ValueError("unsupported outlier method")
-            df["is_noise"] = pred == -1
+                sample_prior_mean = prior_mean
+
+            if method in {"blockade_gmm", "peak_detection"}:
+                valid_mask = self._blockade_gmm_mask(
+                    sub_df,
+                    rm_index=sub_rm_index,
+                    blockade_col=blockade_col,
+                    dwell_col=dwell_col,
+                    n_components=n_components,
+                    visualize=visualize,
+                    prior_mean=sample_prior_mean,
+                )
+                df.loc[idx, "is_noise"] = ~valid_mask
+            else:
+                local_feature_cols = feature_cols or select_feature_columns(sub_df)
+                X = sub_df[local_feature_cols].fillna(0.0)
+                if method == "isolation_forest":
+                    detector = IsolationForest(contamination=contamination, random_state=42)
+                    pred = detector.fit_predict(X)
+                elif method == "lof":
+                    detector = LocalOutlierFactor(contamination=contamination)
+                    pred = detector.fit_predict(X)
+                else:
+                    raise ValueError("unsupported outlier method")
+                df.loc[idx, "is_noise"] = pred == -1
 
         df["quality_tag"] = np.where(df["is_noise"], "noise", "valid")
         self.filtered_df = df

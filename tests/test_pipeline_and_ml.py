@@ -17,6 +17,16 @@ def _make_trace(path: Path, seed: int):
     pd.DataFrame({"time": t, "current": sig}).to_csv(path, index=False)
 
 
+def _make_trace_up(path: Path, seed: int):
+    rng = np.random.default_rng(seed)
+    sr = 10000
+    t = np.arange(0, 1.0, 1 / sr)
+    sig = rng.normal(-5.0, 0.2, size=t.shape)
+    sig[2200:2280] += 2.5
+    sig[7000:7080] += 2.0
+    pd.DataFrame({"time": t, "current": sig}).to_csv(path, index=False)
+
+
 def test_object_workflow_end_to_end(tmp_path: Path):
     assert __version__
 
@@ -52,9 +62,29 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     feat_df = analysis.extract_features()
     assert len(feat_df) > 0
     assert {"left_baseline", "right_baseline", "blockade_ratio", "channel", "sweep", "sample_id", "segment_skew", "segment_kurt", "peak_factor"}.issubset(feat_df.columns)
+    feat_limited = analysis.extract_features(max_event_per_sample=1)
+    assert feat_limited.groupby("trace_id").size().max() <= 1
+    with pytest.raises(ValueError):
+        analysis.extract_features(max_event_per_sample=0)
+    feat_df = analysis.extract_features()
+    assert len(feat_df) > 0
 
-    filtered = analysis.filter_events()
+    filtered = analysis.filter_events(prior_mean={"A1": 0.2, "B1": 0.2})
     assert "quality_tag" in filtered.columns
+    expected_noise = pd.Series(False, index=analysis.feature_df.index)
+    for sample_key, idx in analysis.feature_df.groupby("sample_id").groups.items():
+        sub_df = analysis.feature_df.loc[idx].copy()
+        valid_mask = analysis._blockade_gmm_mask(
+            sub_df,
+            rm_index=None,
+            blockade_col="blockade_ratio",
+            dwell_col="duration_s",
+            n_components=2,
+            visualize=False,
+            prior_mean=0.2,
+        )
+        expected_noise.loc[idx] = ~valid_mask
+    assert np.array_equal(filtered["is_noise"].to_numpy(), expected_noise.to_numpy())
 
     simple_events = analysis.detect_events_simple(
         sample_id="A1",
@@ -109,3 +139,32 @@ def test_object_workflow_end_to_end(tmp_path: Path):
 
     pred = analysis.classify_new_samples({"U1": new_s}, reader="csv")
     assert "pred_label" in pred.columns
+
+
+def test_extract_features_up_direction_delta_and_blockade(tmp_path: Path):
+    s1 = tmp_path / "UP1.csv"
+    _make_trace_up(s1, 123)
+
+    analysis = create_analysis_object(
+        sample_paths={"UP1": s1},
+        sample_to_group={"UP1": "UP"},
+        reader="csv",
+    ).load()
+
+    analysis.denoise(method="moving_average", window=5)
+    analysis.detect_events(
+        detect_method="threshold",
+        detect_direction="up",
+        detect_params={"sigma_k": 3.0, "min_duration_s": 0.001, "noise_method": "std"},
+        baseline_method="global_quantile",
+        baseline_params={"q": 0.5},
+        exclude_current=False,
+    )
+    feat_df = analysis.extract_features()
+    assert len(feat_df) > 0
+
+    r0 = feat_df.iloc[0]
+    expected_delta = -float(r0["global_baseline"]) - (-float(r0["segment_mean"]))
+    expected_blockade = expected_delta / (-float(r0["global_baseline"]) + 1e-12)
+    assert np.isclose(float(r0["delta_i"]), expected_delta, atol=1e-9)
+    assert np.isclose(float(r0["blockade_ratio"]), expected_blockade, atol=1e-9)

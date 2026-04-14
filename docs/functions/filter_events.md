@@ -11,8 +11,11 @@ Flags noisy events using blockade_gmm (default) or alternative anomaly detectors
 - `dwell_col` (`str`): Dwell-time feature column used by blockade_gmm visualization.
 - `rm_index` (`np.ndarray | None`): Optional boolean mask to preselect rows for GMM fitting.
 - `n_components` (`int`): Gaussian mixture component count.
-- `prior_mean` (`float | None`): Optional prior mean used to choose target GMM component.
+- `prior_mean` (`float | dict[str, float] | None`): Optional prior mean used to choose target GMM component. Can be a sample-keyed dict (key is `sample_id`, fallback `trace_id` if `sample_id` is absent).
 - `visualize` (`bool`): Whether to visualize density/scatter during blockade_gmm.
 
 ## Returns
 - `pandas.DataFrame with is_noise/quality_tag columns.`
+
+## Notes
+- Filtering is performed **per sample** (grouped by `sample_id`; fallback to `trace_id`), not on all samples pooled together.
