@@ -69,10 +69,12 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     feat_df = analysis.extract_features()
     assert len(feat_df) > 0
 
-    filtered = analysis.filter_events(
+    analysis.filter_events(
         method="blockade_gmm",
         parameters={"prior_mean": {"A1": 0.2, "B1": 0.2}},
     )
+    assert analysis.feature_df is not None
+    filtered = analysis.feature_df
     assert "quality_tag" in filtered.columns
     assert analysis.filtered_df is not None
     assert set(analysis.filtered_df["quality_tag"].unique()).issubset({"valid"})
@@ -94,11 +96,13 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     )
     expected_quality = np.where((~expected_noise.to_numpy()) & in_lim, "valid", "noise")
     assert np.array_equal(filtered["quality_tag"].to_numpy(), expected_quality)
-    filtered_if = analysis.filter_events(method="isolation_forest")
-    assert "quality_tag" in filtered_if.columns
-    filtered_lof = analysis.filter_events(method="lof")
-    assert "quality_tag" in filtered_lof.columns
-    _ = analysis.filter_events(
+    analysis.filter_events(method="isolation_forest")
+    assert analysis.feature_df is not None
+    assert "quality_tag" in analysis.feature_df.columns
+    analysis.filter_events(method="lof")
+    assert analysis.feature_df is not None
+    assert "quality_tag" in analysis.feature_df.columns
+    analysis.filter_events(
         method="blockade_gmm",
         parameters={"prior_mean": {"A1": 0.2, "B1": 0.2}},
         blockage_lim=(0.0, 2.0),
@@ -150,6 +154,9 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     pkg = analysis.build_best_model(cv=2, scoring="accuracy")
     assert "best_model" in pkg
     assert pkg["best_model"] in analysis.model_cv_results
+    assert {"duration_s", "blockade_ratio", "segment_std", "segment_skew", "segment_kurt"} == set(pkg["feature_cols"])
+    assert "all_samples_feature_pred" in pkg
+    assert "best_model_pred" in pkg["all_samples_feature_pred"].columns
     try:
         _ = analysis.pl.model_metric_bar(metric="accuracy", split="test")
         _ = analysis.pl.model_cm(model_name=pkg["best_model"], split="test")
