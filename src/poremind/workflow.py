@@ -232,6 +232,8 @@ class MultiSampleAnalysis:
             val = float(np.quantile(valid, q))
             return np.full_like(signal, val, dtype=float)
         if method == "rolling_quantile":
+            if bool(np.all(stats_mask)):
+                return estimate_baseline(signal, method="rolling_quantile", **baseline_params)
             window = int(baseline_params.get("window", 10000))
             q = float(baseline_params.get("q", 0.5))
             if window <= 1:
