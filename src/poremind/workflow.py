@@ -559,6 +559,9 @@ class MultiSampleAnalysis:
 
         sample_items = list(self.events.items())
         sample_iterator = sample_items
+        detect_direction = str(self.detect_state.get("detect_direction", "down")).lower()
+        if detect_direction not in {"down", "up"}:
+            detect_direction = "down"
         try:
             from tqdm.auto import tqdm  # type: ignore
 
@@ -615,7 +618,12 @@ class MultiSampleAnalysis:
                 left_base = _window_mean(left_lo, left_hi, e.start_idx)
                 right_base = _window_mean(right_lo, right_hi, e.end_idx - 1)
 
-                blockade_ratio = float(e.delta_i / (abs(global_base) + 1e-12))
+                if detect_direction == "up":
+                    delta_i_feature = float((-global_base) - (-seg_mean))
+                    blockade_ratio = float(delta_i_feature / ((-global_base) + 1e-12))
+                else:
+                    delta_i_feature = float(global_base - seg_mean)
+                    blockade_ratio = float(delta_i_feature / (global_base + 1e-12))
                 centered = seg - seg_mean
                 denom = seg_std + 1e-12
                 skew = float(np.mean((centered / denom) ** 3))
@@ -633,7 +641,7 @@ class MultiSampleAnalysis:
                     "start_time_s": float(tr.time[e.start_idx]),
                     "end_time_s": float(tr.time[e.end_idx - 1]),
                     "duration_s": e.dwell_time_s,
-                    "delta_i": e.delta_i,
+                    "delta_i": delta_i_feature,
                     "snr": e.snr,
                     "left_baseline": left_base,
                     "right_baseline": right_base,

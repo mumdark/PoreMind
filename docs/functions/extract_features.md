@@ -12,3 +12,6 @@ Builds event-level feature table including baseline, morphology and statistical 
 
 ## Notes
 - Shows sample-level and event-level progress bars automatically when `tqdm` is available in the environment.
+- Direction-aware feature convention:
+  - `detect_direction="down"`: `delta_i = global_baseline - segment_mean`, `blockade_ratio = delta_i / global_baseline`.
+  - `detect_direction="up"`: `delta_i = -global_baseline - (-segment_mean)`, `blockade_ratio = delta_i / (-global_baseline)`.

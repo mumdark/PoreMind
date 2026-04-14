@@ -78,6 +78,7 @@ pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="a
 > 默认 `min_duration_s=0`；`rolling_quantile` 默认参数为 `window=10000, q=0.5`。
 > 默认噪声尺度估计为 `noise_method="mad"`（可切换为 `std`）。
 > 默认启用 `exclude_current=True`：`up` 方向默认统计区间 `(-inf, 0)`；`down` 方向默认统计区间 `(0, +inf)`；若过滤后有效点 `<=1` 会直接报错。
+> `extract_features` 中 `delta_i` 与 `blockade_ratio` 会根据 `detect_direction` 做方向一致化计算（`up` 使用负号展开形式）。
 > 提供 `detect_events_simple` 便于在局部时间窗口做初步方法选择与参数调整。
 > `detect_events_simple` 的结果会保存到 `analysis.detect_events_simple_object`（并兼容 `analysis.simple_events`）。
 > `detect_events` / `detect_events_simple` 会按样本显示进度条（若环境安装了 `tqdm`）。
