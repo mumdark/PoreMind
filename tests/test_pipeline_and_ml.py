@@ -69,8 +69,22 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     feat_df = analysis.extract_features()
     assert len(feat_df) > 0
 
-    filtered = analysis.filter_events()
+    filtered = analysis.filter_events(prior_mean={"A1": 0.2, "B1": 0.2})
     assert "quality_tag" in filtered.columns
+    expected_noise = pd.Series(False, index=analysis.feature_df.index)
+    for sample_key, idx in analysis.feature_df.groupby("sample_id").groups.items():
+        sub_df = analysis.feature_df.loc[idx].copy()
+        valid_mask = analysis._blockade_gmm_mask(
+            sub_df,
+            rm_index=None,
+            blockade_col="blockade_ratio",
+            dwell_col="duration_s",
+            n_components=2,
+            visualize=False,
+            prior_mean=0.2,
+        )
+        expected_noise.loc[idx] = ~valid_mask
+    assert np.array_equal(filtered["is_noise"].to_numpy(), expected_noise.to_numpy())
 
     simple_events = analysis.detect_events_simple(
         sample_id="A1",

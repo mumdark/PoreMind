@@ -750,37 +750,64 @@ class MultiSampleAnalysis:
         dwell_col: str = "duration_s",
         rm_index: np.ndarray | None = None,
         n_components: int = 2,
-        prior_mean: float | None = None,
+        prior_mean: float | dict[str, float] | None = None,
         visualize: bool = False,
     ) -> pd.DataFrame:
         if self.feature_df is None:
             self.extract_features()
         assert self.feature_df is not None
         df = self.feature_df.copy()
+        if len(df) == 0:
+            df["is_noise"] = []
+            df["quality_tag"] = []
+            self.filtered_df = df
+            return df
 
-        if method in {"blockade_gmm", "peak_detection"}:
-            valid_mask = self._blockade_gmm_mask(
-                df,
-                rm_index=rm_index,
-                blockade_col=blockade_col,
-                dwell_col=dwell_col,
-                n_components=n_components,
-                visualize=visualize,
-                prior_mean=prior_mean,
-            )
-            df["is_noise"] = ~valid_mask
+        group_col = "sample_id" if "sample_id" in df.columns else ("trace_id" if "trace_id" in df.columns else None)
+        if group_col is None:
+            group_slices: list[tuple[str, pd.Index]] = [("__all__", df.index)]
         else:
-            feature_cols = feature_cols or select_feature_columns(df)
-            X = df[feature_cols].fillna(0.0)
-            if method == "isolation_forest":
-                detector = IsolationForest(contamination=contamination, random_state=42)
-                pred = detector.fit_predict(X)
-            elif method == "lof":
-                detector = LocalOutlierFactor(contamination=contamination)
-                pred = detector.fit_predict(X)
+            group_slices = [(str(sample_key), idx) for sample_key, idx in df.groupby(group_col).groups.items()]
+
+        rm_series = None
+        if rm_index is not None:
+            if len(rm_index) != len(df):
+                raise ValueError("rm_index length must match feature dataframe rows")
+            rm_series = pd.Series(rm_index.astype(bool), index=df.index)
+
+        df["is_noise"] = False
+        for sample_key, idx in group_slices:
+            sub_df = df.loc[idx].copy()
+            sub_rm_index = None if rm_series is None else rm_series.loc[idx].to_numpy(dtype=bool)
+            sample_prior_mean: float | None
+            if isinstance(prior_mean, dict):
+                sample_prior_mean = prior_mean.get(sample_key)
             else:
-                raise ValueError("unsupported outlier method")
-            df["is_noise"] = pred == -1
+                sample_prior_mean = prior_mean
+
+            if method in {"blockade_gmm", "peak_detection"}:
+                valid_mask = self._blockade_gmm_mask(
+                    sub_df,
+                    rm_index=sub_rm_index,
+                    blockade_col=blockade_col,
+                    dwell_col=dwell_col,
+                    n_components=n_components,
+                    visualize=visualize,
+                    prior_mean=sample_prior_mean,
+                )
+                df.loc[idx, "is_noise"] = ~valid_mask
+            else:
+                local_feature_cols = feature_cols or select_feature_columns(sub_df)
+                X = sub_df[local_feature_cols].fillna(0.0)
+                if method == "isolation_forest":
+                    detector = IsolationForest(contamination=contamination, random_state=42)
+                    pred = detector.fit_predict(X)
+                elif method == "lof":
+                    detector = LocalOutlierFactor(contamination=contamination)
+                    pred = detector.fit_predict(X)
+                else:
+                    raise ValueError("unsupported outlier method")
+                df.loc[idx, "is_noise"] = pred == -1
 
         df["quality_tag"] = np.where(df["is_noise"], "noise", "valid")
         self.filtered_df = df
