@@ -162,8 +162,8 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         _ = analysis.pl.model_cm(model_name=pkg["best_model"], split="test")
         _ = analysis.pl.plot_2d(data="filtered", value="label")
         _ = analysis.pl.plot_3d(data="filtered", value="label")
-        _ = analysis.plot.event_current_simple(sample_id="A1", start_event=1, end_event=2)
-        _ = analysis.plot.event_current(sample_id="A1", start_event=1, end_event=2)
+        _ = analysis.plot.event_current_simple(sample_id="A1", start_event=1, end_event=2, ylim=(-10, 10))
+        _ = analysis.plot.event_current(sample_id="A1", start_event=1, end_event=2, ylim=(-10, 10))
     except ImportError:
         pass
 
@@ -183,7 +183,14 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     for c in proba_cols:
         assert c in other_analysis.feature_df.columns
     try:
-        _ = other_analysis.plot.event_current_label(sample_id="U1", lable_col="pred_label", start_event=1, end_event=2)
+        _ = other_analysis.plot.event_current_label(
+            sample_id="U1",
+            lable_col="pred_label",
+            start_event=1,
+            end_event=2,
+            label_offset=3.0,
+            ylim=(-10, 10),
+        )
     except ImportError:
         pass
 

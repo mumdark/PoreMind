@@ -84,6 +84,7 @@ class PlotAccessor:
         end_event: int,
         start_ms: float,
         end_ms: float,
+        ylim: tuple[float, float] | None,
         width: float,
         height: float,
         title_prefix: str,
@@ -118,6 +119,8 @@ class PlotAccessor:
             ax.axvline(float(t_ms[e.end_idx - 1]), color="red", linestyle="--", linewidth=1.0)
         ax.set_xlabel("Time (ms)")
         ax.set_ylabel("Current")
+        if ylim is not None:
+            ax.set_ylim(*ylim)
         ax.set_title(f"{title_prefix} | {sample_id} | {current} | event {start_event}-{end_event}")
         plt.tight_layout()
         return ax
@@ -130,6 +133,7 @@ class PlotAccessor:
         end_event: int = 5,
         start_ms: float = 0.0,
         end_ms: float = 1.0,
+        ylim: tuple[float, float] | None = None,
         width: float = 10.0,
         height: float = 3.0,
     ):
@@ -143,6 +147,7 @@ class PlotAccessor:
             end_event=end_event,
             start_ms=start_ms,
             end_ms=end_ms,
+            ylim=ylim,
             width=width,
             height=height,
             title_prefix="Simple events",
@@ -156,6 +161,7 @@ class PlotAccessor:
         end_event: int = 5,
         start_ms: float = 0.0,
         end_ms: float = 1.0,
+        ylim: tuple[float, float] | None = None,
         width: float = 10.0,
         height: float = 3.0,
         ):
@@ -169,6 +175,7 @@ class PlotAccessor:
             end_event=end_event,
             start_ms=start_ms,
             end_ms=end_ms,
+            ylim=ylim,
             width=width,
             height=height,
             title_prefix="Detected events",
@@ -183,8 +190,10 @@ class PlotAccessor:
         lable_col: str = "pred_label",
         label_size: float = 9.0,
         lable_color: dict[str, str] | None = None,
+        label_offset: float = 3.0,
         start_ms: float = 0.0,
         end_ms: float = 1.0,
+        ylim: tuple[float, float] | None = None,
         width: float = 10.0,
         height: float = 3.0,
     ):
@@ -208,6 +217,7 @@ class PlotAccessor:
             end_event=end_event,
             start_ms=start_ms,
             end_ms=end_ms,
+            ylim=ylim,
             width=width,
             height=height,
             title_prefix=f"Detected events ({lable_col})",
@@ -229,7 +239,6 @@ class PlotAccessor:
         if len(sub) == 0 and "sample_id" in label_df.columns:
             sub = label_df[label_df["sample_id"] == sample_id]
 
-        y_top = float(np.max(y)) if len(y) else 0.0
         color_map = lable_color or {}
         start_i = start_event - 1
         for offset, e in enumerate(selected_events):
@@ -242,8 +251,10 @@ class PlotAccessor:
             if txt == "":
                 continue
             x_mid = float((t_ms[e.start_idx] + t_ms[e.end_idx - 1]) / 2.0)
+            seg_mean = float(np.mean(y[e.start_idx:e.end_idx])) if e.end_idx > e.start_idx else float(y[e.start_idx])
+            y_text = seg_mean + float(label_offset)
             txt_color = color_map.get(txt, "black")
-            ax.text(x_mid, y_top, txt, color=txt_color, fontsize=label_size, ha="center", va="bottom")
+            ax.text(x_mid, y_text, txt, color=txt_color, fontsize=label_size, ha="center", va="bottom")
         return ax
 
     def model_cm(

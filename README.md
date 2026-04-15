@@ -56,8 +56,8 @@ simple_events = analysis.detect_events_simple(
 
 # 绘图模块（pl）：默认显示 0-1 ms
 analysis.pl.current(sample_id=None, current="denoise", start_ms=0.0, end_ms=1.0, width=10, height=3)
-analysis.plot.event_current_simple(sample_id=None, current="denoise", start_event=1, end_event=5)
-analysis.plot.event_current(sample_id=None, current="denoise", start_event=1, end_event=5)
+analysis.plot.event_current_simple(sample_id=None, current="denoise", start_event=1, end_event=5, ylim=None)
+analysis.plot.event_current(sample_id=None, current="denoise", start_event=1, end_event=5, ylim=None)
 
 features = analysis.extract_features(max_event_per_sample=None)  # 每样本可限制提取前N个事件；None表示全部
 analysis.filter_events(method="blockade_gmm", parameters={"n_components": 2, "prior_mean": None}, blockage_lim=(0.1, 1.0))
