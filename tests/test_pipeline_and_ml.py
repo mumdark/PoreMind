@@ -167,10 +167,25 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     except ImportError:
         pass
 
-    other_analysis, pred = analysis.classify_new_samples({"U1": new_s}, reader="csv")
+    other_analysis, pred = analysis.classify_new_samples(
+        {"U1": new_s},
+        reader="csv",
+        custom_feature_fns={"seg": lambda x: {"ptp": float(np.max(x) - np.min(x))}},
+    )
     assert hasattr(other_analysis, "pl")
     assert len(other_analysis.events) > 0
     assert "pred_label" in pred.columns
+    proba_cols = [c for c in pred.columns if c.startswith("pred_proba_")]
+    assert len(proba_cols) >= 2
+    assert "seg_ptp" in pred.columns
+    assert other_analysis.feature_df is not None
+    assert "pred_label" in other_analysis.feature_df.columns
+    for c in proba_cols:
+        assert c in other_analysis.feature_df.columns
+    try:
+        _ = other_analysis.plot.event_current_label(sample_id="U1", lable_col="pred_label", start_event=1, end_event=2)
+    except ImportError:
+        pass
 
 
 def test_extract_features_up_direction_delta_and_blockade(tmp_path: Path):

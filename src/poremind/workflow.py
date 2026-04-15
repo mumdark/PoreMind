@@ -1039,6 +1039,7 @@ class MultiSampleAnalysis:
         new_sample_paths: dict[str, str | Path],
         reader: str | None = None,
         reader_kwargs: dict[str, Any] | None = None,
+        custom_feature_fns: dict[str, FeatureFn] | None = None,
     ) -> tuple["MultiSampleAnalysis", pd.DataFrame]:
         if self.best_model_package is None:
             self.build_best_model()
@@ -1056,7 +1057,7 @@ class MultiSampleAnalysis:
             preprocess_kwargs.update(nested)
 
         other.load().denoise(**preprocess_kwargs).detect_events(**self.detect_state)
-        features = other.extract_features()
+        features = other.extract_features(custom_feature_fns=custom_feature_fns)
 
         X = features[self.best_model_package["feature_cols"]].fillna(0.0)
         pred = self.best_model_package["model"].predict(X)
@@ -1065,7 +1066,10 @@ class MultiSampleAnalysis:
         model = self.best_model_package["model"]
         if hasattr(model, "predict_proba"):
             proba = model.predict_proba(X)
-            out["pred_score_max"] = np.max(proba, axis=1)
+            classes = getattr(model, "classes_", np.arange(proba.shape[1]))
+            for i, cls in enumerate(classes):
+                out[f"pred_proba_{cls}"] = proba[:, i]
+        other.feature_df = out.copy()
         return other, out
 
 

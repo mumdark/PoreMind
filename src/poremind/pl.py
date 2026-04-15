@@ -158,7 +158,7 @@ class PlotAccessor:
         end_ms: float = 1.0,
         width: float = 10.0,
         height: float = 3.0,
-    ):
+        ):
         if not self.analysis.events:
             self.analysis.detect_events()
         return self._event_current_core(
@@ -173,6 +173,78 @@ class PlotAccessor:
             height=height,
             title_prefix="Detected events",
         )
+
+    def event_current_label(
+        self,
+        sample_id: str | None = None,
+        current: str = "denoise",
+        start_event: int = 1,
+        end_event: int = 5,
+        lable_col: str = "pred_label",
+        label_size: float = 9.0,
+        lable_color: dict[str, str] | None = None,
+        start_ms: float = 0.0,
+        end_ms: float = 1.0,
+        width: float = 10.0,
+        height: float = 3.0,
+    ):
+        """Plot detected events with per-event text labels from feature_df."""
+        if not self.analysis.events:
+            self.analysis.detect_events()
+        if self.analysis.feature_df is None:
+            self.analysis.extract_features()
+        assert self.analysis.feature_df is not None
+
+        if sample_id is None:
+            if not self.analysis.traces:
+                self.analysis.load()
+            sample_id = next(iter(self.analysis.traces))
+
+        ax = self._event_current_core(
+            self.analysis.events,
+            sample_id=sample_id,
+            current=current,
+            start_event=start_event,
+            end_event=end_event,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            width=width,
+            height=height,
+            title_prefix=f"Detected events ({lable_col})",
+        )
+
+        trace = self.analysis.traces[sample_id]
+        t_ms = trace.time * 1000.0
+        if current == "denoise":
+            y = self.analysis.denoised[sample_id]
+        else:
+            y = trace.current
+
+        selected_events = self._slice_events(self.analysis.events[sample_id], start_event=start_event, end_event=end_event)
+        label_df = self.analysis.feature_df
+        if "trace_id" in label_df.columns:
+            sub = label_df[label_df["trace_id"] == sample_id]
+        else:
+            sub = label_df.iloc[0:0].copy()
+        if len(sub) == 0 and "sample_id" in label_df.columns:
+            sub = label_df[label_df["sample_id"] == sample_id]
+
+        y_top = float(np.max(y)) if len(y) else 0.0
+        color_map = lable_color or {}
+        start_i = start_event - 1
+        for offset, e in enumerate(selected_events):
+            event_idx = start_i + offset
+            txt = ""
+            if "event_id" in sub.columns and lable_col in sub.columns:
+                hit = sub[sub["event_id"] == event_idx]
+                if len(hit):
+                    txt = str(hit.iloc[0][lable_col])
+            if txt == "":
+                continue
+            x_mid = float((t_ms[e.start_idx] + t_ms[e.end_idx - 1]) / 2.0)
+            txt_color = color_map.get(txt, "black")
+            ax.text(x_mid, y_top, txt, color=txt_color, fontsize=label_size, ha="center", va="bottom")
+        return ax
 
     def model_cm(
         self,

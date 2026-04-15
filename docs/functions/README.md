@@ -18,6 +18,7 @@ One file per function/method.
 - [estimate_baseline](./estimate_baseline.md)
 - [events_to_dataframe](./events_to_dataframe.md)
 - [event_current](./event_current.md)
+- [event_current_label](./event_current_label.md)
 - [event_current_simple](./event_current_simple.md)
 - [extract_features](./extract_features.md)
 - [filter_events](./filter_events.md)
