@@ -9,4 +9,6 @@ Reuses fitted workflow/model to classify events from new samples.
 - `reader_kwargs` (`dict[str, Any] | None`): Optional reader kwargs override.
 
 ## Returns
-- `pandas.DataFrame with per-event predictions.`
+- `tuple[MultiSampleAnalysis, pandas.DataFrame]`:
+  - First value: analysis object for new samples (contains traces/events/features and plotting accessor `pl`/`plot`).
+  - Second value: per-event prediction table (`pred_df`).
