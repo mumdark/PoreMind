@@ -158,7 +158,7 @@ class PlotAccessor:
         end_ms: float = 1.0,
         width: float = 10.0,
         height: float = 3.0,
-    ):
+        ):
         if not self.analysis.events:
             self.analysis.detect_events()
         return self._event_current_core(
@@ -174,16 +174,105 @@ class PlotAccessor:
             title_prefix="Detected events",
         )
 
-    def model_cm(self, model_name: str, split: str = "test", width: float = 5.5, height: float = 4.5):
-        """Visualize aggregated 10-fold confusion matrix for train or test split."""
+    def event_current_label(
+        self,
+        sample_id: str | None = None,
+        current: str = "denoise",
+        start_event: int = 1,
+        end_event: int = 5,
+        lable_col: str = "pred_label",
+        label_size: float = 9.0,
+        lable_color: dict[str, str] | None = None,
+        start_ms: float = 0.0,
+        end_ms: float = 1.0,
+        width: float = 10.0,
+        height: float = 3.0,
+    ):
+        """Plot detected events with per-event text labels from feature_df."""
+        if not self.analysis.events:
+            self.analysis.detect_events()
+        if self.analysis.feature_df is None:
+            self.analysis.extract_features()
+        assert self.analysis.feature_df is not None
+
+        if sample_id is None:
+            if not self.analysis.traces:
+                self.analysis.load()
+            sample_id = next(iter(self.analysis.traces))
+
+        ax = self._event_current_core(
+            self.analysis.events,
+            sample_id=sample_id,
+            current=current,
+            start_event=start_event,
+            end_event=end_event,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            width=width,
+            height=height,
+            title_prefix=f"Detected events ({lable_col})",
+        )
+
+        trace = self.analysis.traces[sample_id]
+        t_ms = trace.time * 1000.0
+        if current == "denoise":
+            y = self.analysis.denoised[sample_id]
+        else:
+            y = trace.current
+
+        selected_events = self._slice_events(self.analysis.events[sample_id], start_event=start_event, end_event=end_event)
+        label_df = self.analysis.feature_df
+        if "trace_id" in label_df.columns:
+            sub = label_df[label_df["trace_id"] == sample_id]
+        else:
+            sub = label_df.iloc[0:0].copy()
+        if len(sub) == 0 and "sample_id" in label_df.columns:
+            sub = label_df[label_df["sample_id"] == sample_id]
+
+        y_top = float(np.max(y)) if len(y) else 0.0
+        color_map = lable_color or {}
+        start_i = start_event - 1
+        for offset, e in enumerate(selected_events):
+            event_idx = start_i + offset
+            txt = ""
+            if "event_id" in sub.columns and lable_col in sub.columns:
+                hit = sub[sub["event_id"] == event_idx]
+                if len(hit):
+                    txt = str(hit.iloc[0][lable_col])
+            if txt == "":
+                continue
+            x_mid = float((t_ms[e.start_idx] + t_ms[e.end_idx - 1]) / 2.0)
+            txt_color = color_map.get(txt, "black")
+            ax.text(x_mid, y_top, txt, color=txt_color, fontsize=label_size, ha="center", va="bottom")
+        return ax
+
+    def model_cm(
+        self,
+        model_name: str,
+        split: str = "test",
+        width: float = 6.0,
+        height: float = 5.0,
+        cmap: str = "Reds",
+        decimals: int = 1,
+    ):
+        """Visualize aggregated row-wise confusion matrix percentage for train or test split."""
         if split not in {"train", "test"}:
             raise ValueError("split must be 'train' or 'test'")
         if model_name not in self.analysis.model_cv_results:
             raise ValueError("model_name not found, run build_best_model first")
 
-        folds = self.analysis.model_cv_results[model_name]["folds"]
+        result = self.analysis.model_cv_results[model_name]
+        folds = result["folds"]
+        labels = result.get("labels")
         key = f"{split}_cm"
         cm = np.sum([f[key] for f in folds], axis=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cm_pct = cm.astype(float) / cm.sum(axis=1, keepdims=True) * 100.0
+        cm_pct = np.nan_to_num(cm_pct)
+        if labels is None:
+            labels = [str(i) for i in range(cm.shape[0])]
+        else:
+            labels = [str(x) for x in labels]
 
         try:
             import matplotlib.pyplot as plt
@@ -191,19 +280,31 @@ class PlotAccessor:
             raise ImportError("analysis.pl.model_cm requires matplotlib") from exc
 
         fig, ax = plt.subplots(figsize=(width, height))
-        im = ax.imshow(cm, cmap="Blues")
-        ax.set_title(f"{model_name} | {split} confusion matrix (10-fold sum)")
+        im = ax.imshow(cm_pct, cmap=cmap, vmin=0.0, vmax=100.0)
+        ax.set_title(f"{model_name} | {split} confusion matrix (%)")
         ax.set_xlabel("Predicted")
         ax.set_ylabel("True")
-        for i in range(cm.shape[0]):
-            for j in range(cm.shape[1]):
-                ax.text(j, i, str(int(cm[i, j])), ha="center", va="center", color="black")
-        fig.colorbar(im, ax=ax)
+        ax.set_xticks(np.arange(len(labels)))
+        ax.set_yticks(np.arange(len(labels)))
+        ax.set_xticklabels(labels, rotation=90)
+        ax.set_yticklabels(labels)
+        for i in range(cm_pct.shape[0]):
+            for j in range(cm_pct.shape[1]):
+                ax.text(j, i, f"{cm_pct[i, j]:.{decimals}f}", ha="center", va="center", color="black")
+        fig.colorbar(im, ax=ax, label="% within true class")
         plt.tight_layout()
         return ax
 
-    def model_metric_bar(self, metric: str = "accuracy", split: str = "test", width: float = 8.0, height: float = 4.0):
-        """Bar plot for model weighted metrics; default macro-weighted accuracy."""
+    def model_metric_bar(
+        self,
+        metric: str = "accuracy",
+        split: str = "test",
+        width: float = 8.0,
+        height: float = 4.0,
+        cmap: str = "RdBu_r",
+        decimals: int = 3,
+    ):
+        """Bar plot for model weighted metrics with descending sorting and gradient color."""
         if split not in {"train", "test"}:
             raise ValueError("split must be 'train' or 'test'")
         metric = metric.lower()
@@ -221,6 +322,20 @@ class PlotAccessor:
         for model_name, result in self.analysis.model_cv_results.items():
             names.append(model_name)
             vals.append(float(result["aggregate"][key]))
+        order = np.argsort(np.asarray(vals))[::-1]
+        names = [names[i] for i in order]
+        vals = [vals[i] for i in order]
+        v_arr = np.asarray(vals, dtype=float)
+        finite_mask = np.isfinite(v_arr)
+        if not finite_mask.any():
+            norm_vals = np.full_like(v_arr, 0.5, dtype=float)
+        else:
+            v_min, v_max = float(np.min(v_arr[finite_mask])), float(np.max(v_arr[finite_mask]))
+            if abs(v_max - v_min) < 1e-12:
+                norm_vals = np.full_like(v_arr, 0.5, dtype=float)
+            else:
+                norm_vals = (v_arr - v_min) / (v_max - v_min)
+                norm_vals[~finite_mask] = 0.0
 
         try:
             import matplotlib.pyplot as plt
@@ -228,10 +343,21 @@ class PlotAccessor:
             raise ImportError("analysis.pl.model_metric_bar requires matplotlib") from exc
 
         fig, ax = plt.subplots(figsize=(width, height))
-        ax.bar(names, vals)
+        cm = plt.get_cmap(cmap)
+        colors = [cm(v) for v in norm_vals]
+        bars = ax.bar(names, vals, color=colors)
         ax.set_ylabel(key)
         ax.set_title(f"Model comparison | {key}")
         ax.tick_params(axis="x", rotation=35)
+        for bar, v in zip(bars, vals):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                f"{v:.{decimals}f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
         plt.tight_layout()
         return ax
 
