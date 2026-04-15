@@ -1034,7 +1034,12 @@ class MultiSampleAnalysis:
         return self.best_model_package
 
     # Step 6: reuse current pipeline + best model on new samples
-    def classify_new_samples(self, new_sample_paths: dict[str, str | Path], reader: str | None = None, reader_kwargs: dict[str, Any] | None = None) -> pd.DataFrame:
+    def classify_new_samples(
+        self,
+        new_sample_paths: dict[str, str | Path],
+        reader: str | None = None,
+        reader_kwargs: dict[str, Any] | None = None,
+    ) -> tuple["MultiSampleAnalysis", pd.DataFrame]:
         if self.best_model_package is None:
             self.build_best_model()
         assert self.best_model_package is not None
@@ -1061,7 +1066,7 @@ class MultiSampleAnalysis:
         if hasattr(model, "predict_proba"):
             proba = model.predict_proba(X)
             out["pred_score_max"] = np.max(proba, axis=1)
-        return out
+        return other, out
 
 
 def create_analysis_object(

@@ -66,7 +66,8 @@ analysis.pl.model_cm(model_name=best_pkg["best_model"], split="test")
 analysis.pl.model_metric_bar(metric="accuracy", split="test")
 analysis.pl.plot_2d(data="filtered", value="label")
 analysis.pl.plot_3d(data="filtered", value="label")
-pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="abf")
+new_analysis, pred = analysis.classify_new_samples({"unknown_01": "unknown_01.abf"}, reader="abf")
+# new_analysis 可直接用于可视化：new_analysis.plot.event_current(...) / new_analysis.pl.plot_2d(...)
 ```
 
 > 说明：ABF 模式默认会遍历该文件全部 channel 与 sweep，并在事件表中输出 `channel`、`sweep` 列。

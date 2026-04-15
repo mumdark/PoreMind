@@ -167,7 +167,9 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     except ImportError:
         pass
 
-    pred = analysis.classify_new_samples({"U1": new_s}, reader="csv")
+    other_analysis, pred = analysis.classify_new_samples({"U1": new_s}, reader="csv")
+    assert hasattr(other_analysis, "pl")
+    assert len(other_analysis.events) > 0
     assert "pred_label" in pred.columns
 
 
