@@ -112,6 +112,15 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         analysis.filtered_df = analysis.feature_df.copy()
         analysis.filtered_df["is_noise"] = False
         analysis.filtered_df["quality_tag"] = "valid"
+    pca_df = analysis.do_pca(feature_cols=["duration_s", "blockade_ratio"], data="filtered")
+    assert {"PC1", "PC2"}.issubset(pca_df.columns)
+    tsne_df = analysis.do_tsne(feature_cols=["duration_s", "blockade_ratio"], data="filtered", perplexity=5.0, n_iter=300)
+    assert {"TSNE1", "TSNE2"}.issubset(tsne_df.columns)
+    try:
+        umap_df = analysis.do_umap(feature_cols=["duration_s", "blockade_ratio"], data="filtered", n_neighbors=5)
+        assert {"UMAP1", "UMAP2"}.issubset(umap_df.columns)
+    except ImportError:
+        pass
 
     simple_events = analysis.detect_events_simple(
         sample_id="A1",
@@ -162,6 +171,8 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         _ = analysis.pl.model_cm(model_name=pkg["best_model"], split="test")
         _ = analysis.pl.plot_2d(data="filtered", value="label")
         _ = analysis.pl.plot_3d(data="filtered", value="label")
+        _ = analysis.pl.stacked_bar(group_col="sample_id", value_col="label", data="filtered")
+        _ = analysis.pl.box_significance(group_col="label", value_col="blockade_ratio", data="filtered", method="ttest")
         _ = analysis.plot.event_current_simple(sample_id="A1", start_event=1, end_event=2, ylim=(-10, 10))
         _ = analysis.plot.event_current(sample_id="A1", start_event=1, end_event=2, ylim=(-10, 10))
     except ImportError:

@@ -14,6 +14,8 @@ from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_s
 from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import StratifiedKFold
 from sklearn.naive_bayes import GaussianNB
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.neural_network import MLPClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -664,6 +666,97 @@ class MultiSampleAnalysis:
         self.feature_state = {"custom_features": list(custom_feature_fns)}
         self.feature_df = pd.DataFrame(rows)
         return self.feature_df
+
+    def _resolve_dimred_df(self, data: str = "filtered") -> tuple[pd.DataFrame, str]:
+        if data == "filtered":
+            if self.filtered_df is None:
+                self.filter_events()
+            assert self.filtered_df is not None
+            return self.filtered_df.copy(), "filtered"
+        if data == "feature":
+            if self.feature_df is None:
+                self.extract_features()
+            assert self.feature_df is not None
+            return self.feature_df.copy(), "feature"
+        raise ValueError("data must be 'filtered' or 'feature'")
+
+    def _save_dimred_df(self, df: pd.DataFrame, target: str) -> pd.DataFrame:
+        if target == "filtered":
+            self.filtered_df = df
+        elif target == "feature":
+            self.feature_df = df
+        return df
+
+    def do_pca(
+        self,
+        feature_cols: list[str] | None = None,
+        data: str = "filtered",
+        random_state: int = 42,
+    ) -> pd.DataFrame:
+        df, target = self._resolve_dimred_df(data=data)
+        use_cols = list(feature_cols) if feature_cols is not None else select_feature_columns(df)
+        missing = [c for c in use_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"missing feature columns for PCA: {missing}")
+        X = df[use_cols].fillna(0.0).to_numpy(dtype=float)
+        if len(X) < 2:
+            raise ValueError("PCA requires at least 2 rows")
+        pca = PCA(n_components=2, random_state=random_state)
+        emb = pca.fit_transform(X)
+        df["PC1"] = emb[:, 0]
+        df["PC2"] = emb[:, 1]
+        return self._save_dimred_df(df, target)
+
+    def do_tsne(
+        self,
+        feature_cols: list[str] | None = None,
+        data: str = "filtered",
+        random_state: int = 42,
+        perplexity: float = 30.0,
+        n_iter: int = 1000,
+    ) -> pd.DataFrame:
+        df, target = self._resolve_dimred_df(data=data)
+        use_cols = list(feature_cols) if feature_cols is not None else select_feature_columns(df)
+        missing = [c for c in use_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"missing feature columns for TSNE: {missing}")
+        X = df[use_cols].fillna(0.0).to_numpy(dtype=float)
+        n = len(X)
+        if n < 2:
+            raise ValueError("TSNE requires at least 2 rows")
+        perp = max(1.0, min(float(perplexity), float(n - 1)))
+        tsne = TSNE(n_components=2, random_state=random_state, perplexity=perp, max_iter=n_iter, init="pca")
+        emb = tsne.fit_transform(X)
+        df["TSNE1"] = emb[:, 0]
+        df["TSNE2"] = emb[:, 1]
+        return self._save_dimred_df(df, target)
+
+    def do_umap(
+        self,
+        feature_cols: list[str] | None = None,
+        data: str = "filtered",
+        random_state: int = 42,
+        n_neighbors: int = 15,
+        min_dist: float = 0.1,
+    ) -> pd.DataFrame:
+        try:
+            import umap.umap_ as umap  # type: ignore
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("do_umap requires umap-learn. Install with `pip install umap-learn`.") from exc
+
+        df, target = self._resolve_dimred_df(data=data)
+        use_cols = list(feature_cols) if feature_cols is not None else select_feature_columns(df)
+        missing = [c for c in use_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"missing feature columns for UMAP: {missing}")
+        X = df[use_cols].fillna(0.0).to_numpy(dtype=float)
+        if len(X) < 2:
+            raise ValueError("UMAP requires at least 2 rows")
+        reducer = umap.UMAP(n_components=2, random_state=random_state, n_neighbors=n_neighbors, min_dist=min_dist)
+        emb = reducer.fit_transform(X)
+        df["UMAP1"] = emb[:, 0]
+        df["UMAP2"] = emb[:, 1]
+        return self._save_dimred_df(df, target)
 
     @staticmethod
     def _blockade_gmm_mask(

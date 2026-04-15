@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
 if TYPE_CHECKING:  # pragma: no cover
     from .workflow import MultiSampleAnalysis
@@ -503,6 +504,155 @@ class PlotAccessor:
         if zlim is not None:
             ax.set_zlim(*zlim)
         ax.set_title("3D feature scatter")
+        plt.tight_layout()
+        return ax
+
+    def stacked_bar(
+        self,
+        group_col: str = "sample_id",
+        value_col: str = "pred_label",
+        data: str = "filtered",
+        label_color: dict[str, str] | None = None,
+        cmap: str = "tab20",
+        width: float = 8.0,
+        height: float = 4.5,
+    ):
+        df = self._pick_df(data=data).copy()
+        if group_col not in df.columns:
+            raise ValueError(f"group_col not found: {group_col}")
+        if value_col not in df.columns:
+            raise ValueError(f"value_col not found: {value_col}")
+        ctab = pd.crosstab(df[group_col].astype(str), df[value_col].astype(str), normalize="index")
+        categories = list(ctab.columns)
+
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("analysis.pl.stacked_bar requires matplotlib") from exc
+
+        palette = plt.get_cmap(cmap, max(1, len(categories)))
+        colors = []
+        for i, c in enumerate(categories):
+            if label_color and c in label_color:
+                colors.append(label_color[c])
+            else:
+                colors.append(palette(i))
+
+        fig, ax = plt.subplots(figsize=(width, height))
+        bottom = np.zeros(len(ctab), dtype=float)
+        x = np.arange(len(ctab))
+        for i, c in enumerate(categories):
+            vals = ctab[c].to_numpy(dtype=float)
+            ax.bar(x, vals, bottom=bottom, label=c, color=colors[i], width=0.8)
+            bottom += vals
+        ax.set_xticks(x)
+        ax.set_xticklabels(ctab.index.astype(str), rotation=45, ha="right")
+        ax.set_ylabel("Proportion")
+        ax.set_xlabel(group_col)
+        ax.set_title(f"Stacked proportion: {value_col} by {group_col}")
+        ax.set_ylim(0.0, 1.0)
+        ax.legend(loc="best", fontsize=8)
+        plt.tight_layout()
+        return ax
+
+    @staticmethod
+    def _format_p_value(p_value: float) -> str:
+        if p_value < 2.2e-16:
+            return "P < 2.2e-16"
+        if p_value > 0.01:
+            return f"P = {round(p_value, 2):.2f}"
+        return f"P = {p_value:.2e}"
+
+    def box_significance(
+        self,
+        group_col: str = "label",
+        value_col: str = "blockade_ratio",
+        data: str = "filtered",
+        method: str = "ttest",
+        label_color: dict[str, str] | None = None,
+        cmap: str = "tab20",
+        reference_group: str | None = None,
+        line_offset: float = 0.02,
+        line_height: float = 1.7,
+        ylim: tuple[float, float] | None = None,
+        log2: bool = False,
+        width: float = 6.0,
+        height: float = 5.0,
+    ):
+        df = self._pick_df(data=data).copy()
+        if group_col not in df.columns:
+            raise ValueError(f"group_col not found: {group_col}")
+        if value_col not in df.columns:
+            raise ValueError(f"value_col not found: {value_col}")
+        vals = df[value_col].to_numpy(dtype=float)
+        if log2:
+            vals = np.log2(np.abs(vals) + 1e-12)
+        plot_df = pd.DataFrame({group_col: df[group_col].astype(str), value_col: vals})
+        medians = plot_df.groupby(group_col)[value_col].median().sort_values(ascending=False)
+        order = medians.index.tolist()
+        if len(order) < 2:
+            raise ValueError("box_significance requires at least 2 groups")
+        ref = reference_group if reference_group is not None else order[0]
+        if ref not in order:
+            raise ValueError("reference_group not found in grouped data")
+
+        try:
+            import matplotlib.pyplot as plt
+            from scipy.stats import ranksums, ttest_ind
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("analysis.pl.box_significance requires matplotlib and scipy") from exc
+
+        cmap_obj = plt.get_cmap(cmap, max(1, len(order)))
+        colors = []
+        for i, g in enumerate(order):
+            if label_color and g in label_color:
+                colors.append(label_color[g])
+            else:
+                colors.append(cmap_obj(i))
+
+        grouped_data = [plot_df.loc[plot_df[group_col] == g, value_col].to_numpy(dtype=float) for g in order]
+        fig, ax = plt.subplots(figsize=(width, height))
+        bp = ax.boxplot(grouped_data, labels=order, patch_artist=True, showfliers=False)
+        for patch, c in zip(bp["boxes"], colors):
+            patch.set_facecolor(c)
+            patch.set_alpha(0.8)
+
+        for i, g in enumerate(order, start=1):
+            median = float(medians[g])
+            ax.text(i, median, f"{median:.2f}", ha="center", va="center", fontsize=9, color="black", fontweight="bold")
+
+        ref_vals = plot_df.loc[plot_df[group_col] == ref, value_col].to_numpy(dtype=float)
+        y_base = float(line_height)
+        ref_idx = order.index(ref) + 1
+        for i, g in enumerate(order):
+            if g == ref:
+                continue
+            cur_vals = plot_df.loc[plot_df[group_col] == g, value_col].to_numpy(dtype=float)
+            if method == "ttest":
+                _, p_value = ttest_ind(cur_vals, ref_vals, equal_var=False, nan_policy="omit")
+            elif method == "ranksum":
+                _, p_value = ranksums(cur_vals, ref_vals)
+            else:
+                raise ValueError("method must be 'ttest' or 'ranksum'")
+            label = self._format_p_value(float(p_value))
+            x1, x2 = ref_idx, i + 1
+            y = y_base
+            y_base += float(line_offset)
+            ax.plot([x1, x1, x2, x2], [y, y + 0.01, y + 0.01, y], color="black", lw=1.2)
+            ax.text((x1 + x2) / 2.0, y + 0.012, label, ha="center", va="bottom", fontsize=8, color="black", fontweight="bold")
+
+        ax.set_title(f"{value_col} by {group_col}")
+        ax.set_xlabel(group_col)
+        ax.set_ylabel(f"{value_col}{' (log2)' if log2 else ''}")
+        ax.tick_params(axis="x", rotation=45)
+        ax.grid(axis="y", linestyle="--", alpha=0.7)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        else:
+            y_min = float(np.nanmin(plot_df[value_col].to_numpy(dtype=float)))
+            y_max = float(np.nanmax(plot_df[value_col].to_numpy(dtype=float)))
+            margin = max(1e-6, 0.1 * (y_max - y_min + 1e-12))
+            ax.set_ylim(y_min - margin, y_max + margin)
         plt.tight_layout()
         return ax
 

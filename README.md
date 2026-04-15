@@ -61,11 +61,16 @@ analysis.plot.event_current(sample_id=None, current="denoise", start_event=1, en
 
 features = analysis.extract_features(max_event_per_sample=None)  # 每样本可限制提取前N个事件；None表示全部
 analysis.filter_events(method="blockade_gmm", parameters={"n_components": 2, "prior_mean": None}, blockage_lim=(0.1, 1.0))
+analysis.do_pca(feature_cols=["duration_s", "blockade_ratio"], data="filtered")
+analysis.do_tsne(feature_cols=["duration_s", "blockade_ratio"], data="filtered")
+# analysis.do_umap(feature_cols=["duration_s", "blockade_ratio"], data="filtered")  # 需安装 umap-learn
 best_pkg = analysis.build_best_model(cv=10, scoring="accuracy")
 analysis.pl.model_cm(model_name=best_pkg["best_model"], split="test")
 analysis.pl.model_metric_bar(metric="accuracy", split="test")
 analysis.pl.plot_2d(data="filtered", value="label")
 analysis.pl.plot_3d(data="filtered", value="label")
+analysis.pl.stacked_bar(group_col="sample_id", value_col="label", data="filtered")
+analysis.pl.box_significance(group_col="label", value_col="blockade_ratio", data="filtered", method="ttest")
 new_analysis, pred = analysis.classify_new_samples(
     {"unknown_01": "unknown_01.abf"},
     reader="abf",
