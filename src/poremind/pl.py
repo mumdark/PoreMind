@@ -622,8 +622,14 @@ class PlotAccessor:
             ax.text(i, median, f"{median:.2f}", ha="center", va="center", fontsize=9, color="black", fontweight="bold")
 
         ref_vals = plot_df.loc[plot_df[group_col] == ref, value_col].to_numpy(dtype=float)
-        y_base = float(line_height)
+        y_min = float(np.nanmin(plot_df[value_col].to_numpy(dtype=float)))
+        y_max = float(np.nanmax(plot_df[value_col].to_numpy(dtype=float)))
+        y_span = max(1e-6, y_max - y_min)
+        y_base = y_max + float(line_height) * 0.02 * y_span
+        step = float(line_offset) * y_span
         ref_idx = order.index(ref) + 1
+        n_pairs = max(1, len(order) - 1)
+        y_top_needed = y_base + n_pairs * step + 0.08 * y_span
         for i, g in enumerate(order):
             if g == ref:
                 continue
@@ -637,7 +643,9 @@ class PlotAccessor:
             label = self._format_p_value(float(p_value))
             x1, x2 = ref_idx, i + 1
             y = y_base
-            y_base += float(line_offset)
+            y_base += step
+            if ylim is not None:
+                y = min(y, float(ylim[1]) - 0.03 * y_span)
             ax.plot([x1, x1, x2, x2], [y, y + 0.01, y + 0.01, y], color="black", lw=1.2)
             ax.text((x1 + x2) / 2.0, y + 0.012, label, ha="center", va="bottom", fontsize=8, color="black", fontweight="bold")
 
@@ -649,10 +657,8 @@ class PlotAccessor:
         if ylim is not None:
             ax.set_ylim(*ylim)
         else:
-            y_min = float(np.nanmin(plot_df[value_col].to_numpy(dtype=float)))
-            y_max = float(np.nanmax(plot_df[value_col].to_numpy(dtype=float)))
             margin = max(1e-6, 0.1 * (y_max - y_min + 1e-12))
-            ax.set_ylim(y_min - margin, y_max + margin)
+            ax.set_ylim(y_min - margin, max(y_max + margin, y_top_needed))
         plt.tight_layout()
         return ax
 
