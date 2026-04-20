@@ -13,6 +13,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_score
 from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import GaussianNB
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -53,6 +54,7 @@ class MultiSampleAnalysis:
     feature_df: pd.DataFrame | None = None
     filtered_df: pd.DataFrame | None = None
     best_model_package: dict[str, Any] | None = None
+    DL_model_package: dict[str, Any] | None = None
     model_cv_results: dict[str, Any] = field(default_factory=dict)
 
     preprocess_state: dict[str, Any] = field(default_factory=dict)
@@ -1085,7 +1087,8 @@ class MultiSampleAnalysis:
         }
         score_key = scoring_key_map.get(scoring, "test_accuracy_weighted")
 
-        self.model_cv_results = {}
+        if self.model_cv_results is None:
+            self.model_cv_results = {}
         scores: dict[str, float] = {}
         best_name = None
         best_score = -np.inf
@@ -1125,6 +1128,361 @@ class MultiSampleAnalysis:
             "feature_state": self.feature_state,
         }
         return self.best_model_package
+
+    @staticmethod
+    def _interp_signal(x: np.ndarray, target_length: int = 500) -> np.ndarray:
+        try:
+            from scipy import interpolate
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("signal interpolation requires scipy") from exc
+        l = len(x)
+        if l <= 1:
+            return np.full(target_length, float(x[0]) if l == 1 else 0.0, dtype=float)
+        xp = np.linspace(0, l - 1, l)
+        f = interpolate.interp1d(xp, x, kind="slinear")
+        x_new = np.linspace(0, l - 1, target_length)
+        y_new = f(x_new)
+        return np.asarray(np.around(y_new, 4), dtype=float)
+
+    @staticmethod
+    def _scale_signal(x: np.ndarray, mode: str | None = "mad") -> np.ndarray:
+        if mode is None or mode == "none":
+            return x
+        if mode == "mad":
+            med = float(np.median(x))
+            mad = float(np.median(np.abs(x - med))) + 1e-12
+            return (x - med) / (1.4826 * mad)
+        if mode == "minmax":
+            lo, hi = float(np.min(x)), float(np.max(x))
+            if hi - lo <= 1e-12:
+                return np.zeros_like(x)
+            return (x - lo) / (hi - lo)
+        raise ValueError("scale mode must be one of: 'mad', 'minmax', 'none'")
+
+    def _build_dl_inputs(
+        self,
+        df: pd.DataFrame,
+        interp_length: int,
+        expand: int,
+        scale: str | None,
+        feature_cols: list[str] | None,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        if "trace_id" not in df.columns or "start_idx" not in df.columns or "end_idx" not in df.columns:
+            raise ValueError("filtered dataframe must include trace_id/start_idx/end_idx for DL training")
+        seqs: list[np.ndarray] = []
+        for _, r in df.iterrows():
+            trace_id = str(r["trace_id"])
+            if trace_id not in self.denoised:
+                raise ValueError(f"trace_id not found in denoised signals: {trace_id}")
+            sig = self.denoised[trace_id]
+            s = max(0, int(r["start_idx"]) - int(expand))
+            e = min(len(sig), int(r["end_idx"]) + int(expand))
+            seg = np.asarray(sig[s:e], dtype=float)
+            seg = self._scale_signal(seg, mode=scale)
+            seqs.append(self._interp_signal(seg, target_length=interp_length))
+        X_seq = np.stack(seqs, axis=0).astype(np.float32)
+        X_feat: np.ndarray | None = None
+        if feature_cols is not None:
+            missing = [c for c in feature_cols if c not in df.columns]
+            if missing:
+                raise ValueError(f"feature columns missing for DL model: {missing}")
+            X_feat = df[feature_cols].fillna(0.0).to_numpy(dtype=np.float32)
+        return X_seq, X_feat
+
+    def build_DL_model(
+        self,
+        model: Any | None = None,
+        model_name: str = "1D-CNN",
+        feature_cols: list[str] | None = None,
+        interp_length: int = 500,
+        expand: int = 50,
+        scale: str | None = "mad",
+        device: str = "cuda",
+        batch_size: int = 64,
+        learning_rate: float = 1e-3,
+        epoch: int = 30,
+        early_stop_patience: int = 5,
+        cv: int = 10,
+        label_col: str = "label",
+    ) -> dict[str, Any]:
+        try:
+            import torch
+            import torch.nn as nn
+            from torch.utils.data import DataLoader, TensorDataset
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("build_DL_model requires PyTorch") from exc
+
+        if self.filtered_df is None:
+            self.filter_events()
+        assert self.filtered_df is not None
+        df = self.filtered_df.copy()
+        if label_col not in df.columns:
+            raise ValueError("label column missing for DL model training")
+        if feature_cols is None:
+            feature_cols = ["duration_s", "blockade_ratio", "segment_std", "segment_skew", "segment_kurt"]
+        if feature_cols is not None and len(feature_cols) == 0:
+            feature_cols = None
+
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+        dev = torch.device(device)
+
+        X_seq, X_feat = self._build_dl_inputs(df, interp_length=interp_length, expand=expand, scale=scale, feature_cols=feature_cols)
+        classes = sorted(pd.unique(df[label_col]))
+        class_to_idx = {c: i for i, c in enumerate(classes)}
+        y_idx = np.asarray([class_to_idx[v] for v in df[label_col].tolist()], dtype=np.int64)
+
+        n_classes = len(classes)
+        if n_classes < 2:
+            raise ValueError("DL model requires at least 2 classes")
+
+        class DefaultConvExtractor(nn.Module):
+            def __init__(self, out_dim: int = 10):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Conv1d(1, 16, kernel_size=7, padding=3),
+                    nn.ReLU(),
+                    nn.MaxPool1d(2),
+                    nn.Conv1d(16, 32, kernel_size=5, padding=2),
+                    nn.ReLU(),
+                    nn.MaxPool1d(2),
+                    nn.AdaptiveAvgPool1d(1),
+                    nn.Flatten(),
+                    nn.Linear(32, out_dim),
+                    nn.ReLU(),
+                )
+
+            def forward(self, x):
+                return self.net(x)
+
+        extractor = model if model is not None else DefaultConvExtractor(out_dim=10)
+        feat_dim = int(X_feat.shape[1]) if X_feat is not None else 0
+        if not hasattr(extractor, "forward"):
+            raise ValueError("model must be a torch module/feature extractor with forward")
+        with torch.no_grad():
+            dummy = torch.zeros(1, 1, interp_length, dtype=torch.float32)
+            conv_dim = int(extractor(dummy).shape[1])
+        head = nn.Linear(conv_dim + feat_dim, n_classes)
+        full_model = nn.ModuleDict({"extractor": extractor, "head": head}).to(dev)
+
+        def _forward(x_seq_t, x_feat_t):
+            z = full_model["extractor"](x_seq_t)
+            if x_feat_t is not None:
+                z = torch.cat([z, x_feat_t], dim=1)
+            return full_model["head"](z)
+
+        criterion = nn.CrossEntropyLoss()
+        splitter = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+        folds: list[dict[str, Any]] = []
+        fold_losses: list[dict[str, list[float]]] = []
+        best_state = None
+        best_fold_score = -np.inf
+
+        for fold_id, (tr_idx, te_idx) in enumerate(splitter.split(X_seq, y_idx), start=1):
+            tr_sub, val_sub = train_test_split(tr_idx, test_size=0.1, random_state=42, stratify=y_idx[tr_idx] if len(np.unique(y_idx[tr_idx])) > 1 else None)
+
+            optimizer = torch.optim.Adam(full_model.parameters(), lr=learning_rate)
+            full_model.train()
+            tr_ds = TensorDataset(torch.from_numpy(X_seq[tr_sub]).unsqueeze(1), torch.from_numpy(y_idx[tr_sub]))
+            val_ds = TensorDataset(torch.from_numpy(X_seq[val_sub]).unsqueeze(1), torch.from_numpy(y_idx[val_sub]))
+            te_ds = TensorDataset(torch.from_numpy(X_seq[te_idx]).unsqueeze(1), torch.from_numpy(y_idx[te_idx]))
+            if X_feat is not None:
+                tr_ds = TensorDataset(torch.from_numpy(X_seq[tr_sub]).unsqueeze(1), torch.from_numpy(X_feat[tr_sub]), torch.from_numpy(y_idx[tr_sub]))
+                val_ds = TensorDataset(torch.from_numpy(X_seq[val_sub]).unsqueeze(1), torch.from_numpy(X_feat[val_sub]), torch.from_numpy(y_idx[val_sub]))
+                te_ds = TensorDataset(torch.from_numpy(X_seq[te_idx]).unsqueeze(1), torch.from_numpy(X_feat[te_idx]), torch.from_numpy(y_idx[te_idx]))
+
+            tr_loader = DataLoader(tr_ds, batch_size=batch_size, shuffle=True)
+            val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+            te_loader = DataLoader(te_ds, batch_size=batch_size, shuffle=False)
+
+            best_val = float("inf")
+            patience = 0
+            best_epoch_state = {k: v.detach().cpu().clone() for k, v in full_model.state_dict().items()}
+            train_loss_hist: list[float] = []
+            val_loss_hist: list[float] = []
+            epoch_iter = range(epoch)
+            try:
+                from tqdm.auto import tqdm  # type: ignore
+
+                epoch_iter = tqdm(epoch_iter, desc=f"build_DL_model:{model_name}:fold{fold_id}", leave=False)
+            except Exception:
+                epoch_iter = range(epoch)
+
+            for _ in epoch_iter:
+                full_model.train()
+                tr_losses = []
+                for batch in tr_loader:
+                    optimizer.zero_grad()
+                    if X_feat is None:
+                        x_seq_b, y_b = batch
+                        logits = _forward(x_seq_b.to(dev), None)
+                    else:
+                        x_seq_b, x_feat_b, y_b = batch
+                        logits = _forward(x_seq_b.to(dev), x_feat_b.to(dev))
+                    loss = criterion(logits, y_b.to(dev))
+                    loss.backward()
+                    optimizer.step()
+                    tr_losses.append(float(loss.detach().cpu()))
+                tr_loss = float(np.mean(tr_losses)) if tr_losses else np.nan
+
+                full_model.eval()
+                with torch.no_grad():
+                    val_losses = []
+                    for batch in val_loader:
+                        if X_feat is None:
+                            x_seq_b, y_b = batch
+                            logits = _forward(x_seq_b.to(dev), None)
+                        else:
+                            x_seq_b, x_feat_b, y_b = batch
+                            logits = _forward(x_seq_b.to(dev), x_feat_b.to(dev))
+                        val_losses.append(float(criterion(logits, y_b.to(dev)).detach().cpu()))
+                val_loss = float(np.mean(val_losses)) if val_losses else np.nan
+                train_loss_hist.append(tr_loss)
+                val_loss_hist.append(val_loss)
+                if val_loss < best_val:
+                    best_val = val_loss
+                    patience = 0
+                    best_epoch_state = {k: v.detach().cpu().clone() for k, v in full_model.state_dict().items()}
+                else:
+                    patience += 1
+                    if patience >= early_stop_patience:
+                        break
+
+            full_model.load_state_dict(best_epoch_state)
+            full_model.eval()
+            y_te = y_idx[te_idx]
+            preds = []
+            probs = []
+            with torch.no_grad():
+                for batch in te_loader:
+                    if X_feat is None:
+                        x_seq_b, _ = batch
+                        logits = _forward(x_seq_b.to(dev), None)
+                    else:
+                        x_seq_b, x_feat_b, _ = batch
+                        logits = _forward(x_seq_b.to(dev), x_feat_b.to(dev))
+                    p = torch.softmax(logits, dim=1)
+                    probs.append(p.detach().cpu().numpy())
+                    preds.append(torch.argmax(p, dim=1).detach().cpu().numpy())
+            pred_idx = np.concatenate(preds)
+            prob_arr = np.concatenate(probs, axis=0)
+            test_acc = float(accuracy_score(y_te, pred_idx))
+            fold = {
+                "fold": fold_id,
+                "train_n": int(len(tr_sub)),
+                "test_n": int(len(te_idx)),
+                "test_accuracy": test_acc,
+                "test_f1": float(f1_score(y_te, pred_idx, average="macro", zero_division=0)),
+                "test_recall": float(recall_score(y_te, pred_idx, average="macro", zero_division=0)),
+                "test_cm": confusion_matrix(y_te, pred_idx, labels=np.arange(n_classes)),
+                "fit_error": None,
+            }
+            folds.append(fold)
+            fold_losses.append({"train_loss": train_loss_hist, "val_loss": val_loss_hist})
+            if test_acc > best_fold_score:
+                best_fold_score = test_acc
+                best_state = {k: v.detach().cpu().clone() for k, v in full_model.state_dict().items()}
+
+        if best_state is None:
+            raise RuntimeError("DL training failed")
+        full_model.load_state_dict(best_state)
+        full_model.eval()
+
+        # full-data prediction and write back to filtered_df
+        with torch.no_grad():
+            x_seq_all = torch.from_numpy(X_seq).unsqueeze(1).to(dev)
+            if X_feat is None:
+                logits_all = _forward(x_seq_all, None)
+            else:
+                x_feat_all = torch.from_numpy(X_feat).to(dev)
+                logits_all = _forward(x_seq_all, x_feat_all)
+            prob_all = torch.softmax(logits_all, dim=1).detach().cpu().numpy()
+            pred_all = np.argmax(prob_all, axis=1)
+
+        suffix = model_name
+        out_df = df.copy()
+        out_df[f"pred_label_{suffix}"] = [classes[i] for i in pred_all]
+        for i, cls in enumerate(classes):
+            out_df[f"pred_proba_{cls}_{suffix}"] = prob_all[:, i]
+        self.filtered_df = out_df
+
+        agg = {
+            "test_accuracy_weighted": float(np.nanmean([f["test_accuracy"] for f in folds])),
+            "test_f1_weighted": float(np.nanmean([f["test_f1"] for f in folds])),
+            "test_recall_weighted": float(np.nanmean([f["test_recall"] for f in folds])),
+        }
+        self.model_cv_results[model_name] = {"folds": folds, "aggregate": agg, "labels": classes, "fold_losses": fold_losses, "type": "dl"}
+        self.DL_model_package = {
+            "model_name": model_name,
+            "model": full_model,
+            "model_state_dict": {k: v.detach().cpu().clone() for k, v in full_model.state_dict().items()},
+            "classes": classes,
+            "class_to_idx": class_to_idx,
+            "feature_cols": feature_cols,
+            "interp_length": interp_length,
+            "expand": expand,
+            "scale": scale,
+            "device": str(dev),
+            "cv_results": self.model_cv_results[model_name],
+        }
+        return self.DL_model_package
+
+    def classify_new_samples_DL(
+        self,
+        new_sample_paths: dict[str, str | Path],
+        reader: str | None = None,
+        reader_kwargs: dict[str, Any] | None = None,
+        custom_feature_fns: dict[str, FeatureFn] | None = None,
+    ) -> tuple["MultiSampleAnalysis", pd.DataFrame]:
+        try:
+            import torch
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("classify_new_samples_DL requires PyTorch") from exc
+        if not hasattr(self, "DL_model_package") or self.DL_model_package is None:
+            self.build_DL_model()
+        pkg = self.DL_model_package
+
+        other = MultiSampleAnalysis(
+            sample_paths=new_sample_paths,
+            sample_to_group=None,
+            reader=reader or self.reader,
+            reader_kwargs=reader_kwargs or self.reader_kwargs,
+        )
+        preprocess_kwargs = self.preprocess_state.copy()
+        other.load().denoise(**preprocess_kwargs).detect_events(**self.detect_state)
+        features = other.extract_features(custom_feature_fns=custom_feature_fns)
+
+        X_seq, X_feat = other._build_dl_inputs(
+            features,
+            interp_length=int(pkg["interp_length"]),
+            expand=int(pkg["expand"]),
+            scale=pkg["scale"],
+            feature_cols=pkg["feature_cols"],
+        )
+        model_obj = pkg["model"]
+        model_obj.eval()
+        dev = torch.device(pkg.get("device", "cpu"))
+        model_obj.to(dev)
+        with torch.no_grad():
+            x_seq_t = torch.from_numpy(X_seq).unsqueeze(1).to(dev)
+            if X_feat is None:
+                z = model_obj["extractor"](x_seq_t)
+                logits = model_obj["head"](z)
+            else:
+                x_feat_t = torch.from_numpy(X_feat).to(dev)
+                z = model_obj["extractor"](x_seq_t)
+                logits = model_obj["head"](torch.cat([z, x_feat_t], dim=1))
+            p = torch.softmax(logits, dim=1).detach().cpu().numpy()
+            pred_idx = np.argmax(p, axis=1)
+
+        classes = pkg["classes"]
+        out = features.copy()
+        suffix = pkg["model_name"]
+        out[f"pred_label_{suffix}"] = [classes[i] for i in pred_idx]
+        for i, cls in enumerate(classes):
+            out[f"pred_proba_{cls}_{suffix}"] = p[:, i]
+        other.feature_df = out.copy()
+        return other, out
 
     # Step 6: reuse current pipeline + best model on new samples
     def classify_new_samples(

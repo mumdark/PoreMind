@@ -178,6 +178,26 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     except ImportError:
         pass
 
+    try:
+        import torch  # noqa: F401
+
+        dl_pkg = analysis.build_DL_model(
+            model_name="1D-CNN",
+            cv=2,
+            epoch=2,
+            early_stop_patience=1,
+            batch_size=16,
+            device="cpu",
+        )
+        assert "model_state_dict" in dl_pkg
+        assert analysis.filtered_df is not None
+        assert any(c.startswith("pred_label_1D-CNN") for c in analysis.filtered_df.columns)
+        other_dl, pred_dl = analysis.classify_new_samples_DL({"U1": new_s}, reader="csv")
+        assert other_dl.feature_df is not None
+        assert any(c.startswith("pred_label_1D-CNN") for c in pred_dl.columns)
+    except ImportError:
+        pass
+
     other_analysis, pred = analysis.classify_new_samples(
         {"U1": new_s},
         reader="csv",

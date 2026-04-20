@@ -10,6 +10,7 @@ Plots weighted metric bars across models in descending order, with gradient colo
 - `height` (`float`): Figure height.
 - `cmap` (`str`): Matplotlib colormap name for score gradient. Default `RdBu_r` (high score red, low score blue).
 - `decimals` (`int`): Decimal places shown above each bar. Default `3`.
+- `y_lim` (`tuple[float, float]`): y-axis limits for score display. Default `(0.0, 1.1)`.
 
 ## Returns
 - `matplotlib Axes`

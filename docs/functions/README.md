@@ -4,8 +4,10 @@ One file per function/method.
 
 - [analyze_abf_to_event_df](./analyze_abf_to_event_df.md)
 - [build_best_model](./build_best_model.md)
+- [build_DL_model](./build_DL_model.md)
 - [butterworth_filtfilt](./butterworth_filtfilt.md)
 - [classify_new_samples](./classify_new_samples.md)
+- [classify_new_samples_DL](./classify_new_samples_DL.md)
 - [create_analysis_object](./create_analysis_object.md)
 - [current](./current.md)
 - [denoise](./denoise.md)
@@ -30,6 +32,7 @@ One file per function/method.
 - [median_filter](./median_filter.md)
 - [model_cm](./model_cm.md)
 - [model_metric_bar](./model_metric_bar.md)
+- [plot_fold_loss](./plot_fold_loss.md)
 - [moving_average](./moving_average.md)
 - [stacked_bar](./stacked_bar.md)
 - [box_significance](./box_significance.md)

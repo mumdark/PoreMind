@@ -71,11 +71,15 @@ analysis.pl.plot_2d(data="filtered", value="label")
 analysis.pl.plot_3d(data="filtered", value="label")
 analysis.pl.stacked_bar(group_col="sample_id", value_col="label", data="filtered")
 analysis.pl.box_significance(group_col="label", value_col="blockade_ratio", data="filtered", method="ttest")
+dl_pkg = analysis.build_DL_model(model_name="1D-CNN", device="cuda", epoch=30, batch_size=64)
+analysis.pl.plot_fold_loss(model_name="1D-CNN")
 new_analysis, pred = analysis.classify_new_samples(
     {"unknown_01": "unknown_01.abf"},
     reader="abf",
     custom_feature_fns={"seg": lambda x: {"ptp": float(x.max() - x.min())}},
 )
+# DL 新样本分类
+new_analysis_dl, pred_dl = analysis.classify_new_samples_DL({"unknown_01": "unknown_01.abf"}, reader="abf")
 # new_analysis 可直接用于可视化：new_analysis.plot.event_current(...) / new_analysis.pl.plot_2d(...)
 # pred 中会包含 pred_label 以及每个类别的概率列（pred_proba_<class>）
 ```

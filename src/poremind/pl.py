@@ -315,6 +315,7 @@ class PlotAccessor:
         height: float = 4.0,
         cmap: str = "RdBu_r",
         decimals: int = 3,
+        y_lim: tuple[float, float] = (0.0, 1.1),
     ):
         """Bar plot for model weighted metrics with descending sorting and gradient color."""
         if split not in {"train", "test"}:
@@ -361,6 +362,7 @@ class PlotAccessor:
         ax.set_ylabel(key)
         ax.set_title(f"Model comparison | {key}")
         ax.tick_params(axis="x", rotation=35)
+        ax.set_ylim(*y_lim)
         for bar, v in zip(bars, vals):
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
@@ -659,6 +661,39 @@ class PlotAccessor:
         else:
             margin = max(1e-6, 0.1 * (y_max - y_min + 1e-12))
             ax.set_ylim(y_min - margin, max(y_max + margin, y_top_needed))
+        plt.tight_layout()
+        return ax
+
+    def plot_fold_loss(
+        self,
+        model_name: str = "1D-CNN",
+        width: float = 8.0,
+        height: float = 5.0,
+    ):
+        if model_name not in self.analysis.model_cv_results:
+            raise ValueError("model_name not found in model_cv_results")
+        result = self.analysis.model_cv_results[model_name]
+        fold_losses = result.get("fold_losses")
+        if not fold_losses:
+            raise ValueError("no fold_losses found for this model")
+
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("analysis.pl.plot_fold_loss requires matplotlib") from exc
+
+        fig, ax = plt.subplots(figsize=(width, height))
+        for i, rec in enumerate(fold_losses, start=1):
+            tr = rec.get("train_loss", [])
+            va = rec.get("val_loss", [])
+            if len(tr):
+                ax.plot(np.arange(1, len(tr) + 1), tr, linewidth=1.0, alpha=0.8, label=f"Fold {i} Train")
+            if len(va):
+                ax.plot(np.arange(1, len(va) + 1), va, linewidth=1.0, alpha=0.8, linestyle="--", label=f"Fold {i} Val")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_title(f"Fold loss curves | {model_name}")
+        ax.legend(loc="best", fontsize=8, ncol=2)
         plt.tight_layout()
         return ax
 
