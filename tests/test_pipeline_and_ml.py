@@ -69,10 +69,12 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     feat_df = analysis.extract_features()
     assert len(feat_df) > 0
 
-    filtered = analysis.filter_events(
+    analysis.filter_events(
         method="blockade_gmm",
         parameters={"prior_mean": {"A1": 0.2, "B1": 0.2}},
     )
+    assert analysis.feature_df is not None
+    filtered = analysis.feature_df
     assert "quality_tag" in filtered.columns
     assert analysis.filtered_df is not None
     assert set(analysis.filtered_df["quality_tag"].unique()).issubset({"valid"})
@@ -94,11 +96,13 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     )
     expected_quality = np.where((~expected_noise.to_numpy()) & in_lim, "valid", "noise")
     assert np.array_equal(filtered["quality_tag"].to_numpy(), expected_quality)
-    filtered_if = analysis.filter_events(method="isolation_forest")
-    assert "quality_tag" in filtered_if.columns
-    filtered_lof = analysis.filter_events(method="lof")
-    assert "quality_tag" in filtered_lof.columns
-    _ = analysis.filter_events(
+    analysis.filter_events(method="isolation_forest")
+    assert analysis.feature_df is not None
+    assert "quality_tag" in analysis.feature_df.columns
+    analysis.filter_events(method="lof")
+    assert analysis.feature_df is not None
+    assert "quality_tag" in analysis.feature_df.columns
+    analysis.filter_events(
         method="blockade_gmm",
         parameters={"prior_mean": {"A1": 0.2, "B1": 0.2}},
         blockage_lim=(0.0, 2.0),
@@ -108,6 +112,15 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         analysis.filtered_df = analysis.feature_df.copy()
         analysis.filtered_df["is_noise"] = False
         analysis.filtered_df["quality_tag"] = "valid"
+    pca_df = analysis.do_pca(feature_cols=["duration_s", "blockade_ratio"], data="filtered")
+    assert {"PC1", "PC2"}.issubset(pca_df.columns)
+    tsne_df = analysis.do_tsne(feature_cols=["duration_s", "blockade_ratio"], data="filtered", perplexity=5.0, n_iter=300)
+    assert {"TSNE1", "TSNE2"}.issubset(tsne_df.columns)
+    try:
+        umap_df = analysis.do_umap(feature_cols=["duration_s", "blockade_ratio"], data="filtered", n_neighbors=5)
+        assert {"UMAP1", "UMAP2"}.issubset(umap_df.columns)
+    except ImportError:
+        pass
 
     simple_events = analysis.detect_events_simple(
         sample_id="A1",
@@ -150,18 +163,67 @@ def test_object_workflow_end_to_end(tmp_path: Path):
     pkg = analysis.build_best_model(cv=2, scoring="accuracy")
     assert "best_model" in pkg
     assert pkg["best_model"] in analysis.model_cv_results
+    assert {"duration_s", "blockade_ratio", "segment_std", "segment_skew", "segment_kurt"} == set(pkg["feature_cols"])
+    assert "all_samples_feature_pred" in pkg
+    assert "best_model_pred" in pkg["all_samples_feature_pred"].columns
     try:
         _ = analysis.pl.model_metric_bar(metric="accuracy", split="test")
         _ = analysis.pl.model_cm(model_name=pkg["best_model"], split="test")
         _ = analysis.pl.plot_2d(data="filtered", value="label")
         _ = analysis.pl.plot_3d(data="filtered", value="label")
-        _ = analysis.plot.event_current_simple(sample_id="A1", start_event=1, end_event=2)
-        _ = analysis.plot.event_current(sample_id="A1", start_event=1, end_event=2)
+        _ = analysis.pl.stacked_bar(group_col="sample_id", value_col="label", data="filtered")
+        _ = analysis.pl.box_significance(group_col="label", value_col="blockade_ratio", data="filtered", method="ttest")
+        _ = analysis.plot.event_current_simple(sample_id="A1", start_event=1, end_event=2, ylim=(-10, 10))
+        _ = analysis.plot.event_current(sample_id="A1", start_event=1, end_event=2, ylim=(-10, 10))
     except ImportError:
         pass
 
-    pred = analysis.classify_new_samples({"U1": new_s}, reader="csv")
+    try:
+        import torch  # noqa: F401
+
+        dl_pkg = analysis.build_DL_model(
+            model_name="1D-CNN",
+            cv=2,
+            epoch=2,
+            early_stop_patience=1,
+            batch_size=16,
+            device="cpu",
+        )
+        assert "model_state_dict" in dl_pkg
+        assert analysis.filtered_df is not None
+        assert any(c.startswith("pred_label_1D-CNN") for c in analysis.filtered_df.columns)
+        other_dl, pred_dl = analysis.classify_new_samples_DL({"U1": new_s}, reader="csv")
+        assert other_dl.feature_df is not None
+        assert any(c.startswith("pred_label_1D-CNN") for c in pred_dl.columns)
+    except ImportError:
+        pass
+
+    other_analysis, pred = analysis.classify_new_samples(
+        {"U1": new_s},
+        reader="csv",
+        custom_feature_fns={"seg": lambda x: {"ptp": float(np.max(x) - np.min(x))}},
+    )
+    assert hasattr(other_analysis, "pl")
+    assert len(other_analysis.events) > 0
     assert "pred_label" in pred.columns
+    proba_cols = [c for c in pred.columns if c.startswith("pred_proba_")]
+    assert len(proba_cols) >= 2
+    assert "seg_ptp" in pred.columns
+    assert other_analysis.feature_df is not None
+    assert "pred_label" in other_analysis.feature_df.columns
+    for c in proba_cols:
+        assert c in other_analysis.feature_df.columns
+    try:
+        _ = other_analysis.plot.event_current_label(
+            sample_id="U1",
+            lable_col="pred_label",
+            start_event=1,
+            end_event=2,
+            label_offset=3.0,
+            ylim=(-10, 10),
+        )
+    except ImportError:
+        pass
 
 
 def test_extract_features_up_direction_delta_and_blockade(tmp_path: Path):
