@@ -55,6 +55,7 @@ class MultiSampleAnalysis:
     filtered_df: pd.DataFrame | None = None
     best_model_package: dict[str, Any] | None = None
     DL_model_package: dict[str, Any] | None = None
+    DL_model_packages: dict[str, dict[str, Any]] = field(default_factory=dict)
     model_cv_results: dict[str, Any] = field(default_factory=dict)
 
     preprocess_state: dict[str, Any] = field(default_factory=dict)
@@ -1093,12 +1094,19 @@ class MultiSampleAnalysis:
         best_name = None
         best_score = -np.inf
         best_estimator = None
+        trained_models: dict[str, Any] = {}
 
         for name, est in models.items():
             cv_result = self._evaluate_model_cv(est, X, y, cv=cv)
             self.model_cv_results[name] = cv_result
             s = float(cv_result["aggregate"][score_key])
             scores[name] = s
+            try:
+                fitted = clone(est)
+                fitted.fit(X, y)
+                trained_models[name] = fitted
+            except Exception:
+                pass
             if not np.isnan(s) and s > best_score:
                 best_score = s
                 best_name = name
@@ -1121,6 +1129,7 @@ class MultiSampleAnalysis:
             "feature_cols": feature_cols,
             "scores": scores,
             "best_model": best_name,
+            "models": trained_models,
             "cv_results": self.model_cv_results,
             "all_samples_feature_pred": all_samples_feature_pred,
             "preprocess_state": self.preprocess_state,
@@ -1425,76 +1434,20 @@ class MultiSampleAnalysis:
             "device": str(dev),
             "cv_results": self.model_cv_results[model_name],
         }
+        self.DL_model_packages[model_name] = self.DL_model_package
         return self.DL_model_package
 
-    def classify_new_samples_DL(
-        self,
-        new_sample_paths: dict[str, str | Path],
-        reader: str | None = None,
-        reader_kwargs: dict[str, Any] | None = None,
-        custom_feature_fns: dict[str, FeatureFn] | None = None,
-    ) -> tuple["MultiSampleAnalysis", pd.DataFrame]:
-        try:
-            import torch
-        except Exception as exc:  # pragma: no cover
-            raise ImportError("classify_new_samples_DL requires PyTorch") from exc
-        if not hasattr(self, "DL_model_package") or self.DL_model_package is None:
-            self.build_DL_model()
-        pkg = self.DL_model_package
-
-        other = MultiSampleAnalysis(
-            sample_paths=new_sample_paths,
-            sample_to_group=None,
-            reader=reader or self.reader,
-            reader_kwargs=reader_kwargs or self.reader_kwargs,
-        )
-        preprocess_kwargs = self.preprocess_state.copy()
-        other.load().denoise(**preprocess_kwargs).detect_events(**self.detect_state)
-        features = other.extract_features(custom_feature_fns=custom_feature_fns)
-
-        X_seq, X_feat = other._build_dl_inputs(
-            features,
-            interp_length=int(pkg["interp_length"]),
-            expand=int(pkg["expand"]),
-            scale=pkg["scale"],
-            feature_cols=pkg["feature_cols"],
-        )
-        model_obj = pkg["model"]
-        model_obj.eval()
-        dev = torch.device(pkg.get("device", "cpu"))
-        model_obj.to(dev)
-        with torch.no_grad():
-            x_seq_t = torch.from_numpy(X_seq).unsqueeze(1).to(dev)
-            if X_feat is None:
-                z = model_obj["extractor"](x_seq_t)
-                logits = model_obj["head"](z)
-            else:
-                x_feat_t = torch.from_numpy(X_feat).to(dev)
-                z = model_obj["extractor"](x_seq_t)
-                logits = model_obj["head"](torch.cat([z, x_feat_t], dim=1))
-            p = torch.softmax(logits, dim=1).detach().cpu().numpy()
-            pred_idx = np.argmax(p, axis=1)
-
-        classes = pkg["classes"]
-        out = features.copy()
-        suffix = pkg["model_name"]
-        out[f"pred_label_{suffix}"] = [classes[i] for i in pred_idx]
-        for i, cls in enumerate(classes):
-            out[f"pred_proba_{cls}_{suffix}"] = p[:, i]
-        other.feature_df = out.copy()
-        return other, out
-
-    # Step 6: reuse current pipeline + best model on new samples
+    # Step 6: reuse current pipeline + trained model on new samples
     def classify_new_samples(
         self,
         new_sample_paths: dict[str, str | Path],
         reader: str | None = None,
         reader_kwargs: dict[str, Any] | None = None,
         custom_feature_fns: dict[str, FeatureFn] | None = None,
+        model: str | Any | None = None,
     ) -> tuple["MultiSampleAnalysis", pd.DataFrame]:
-        if self.best_model_package is None:
+        if self.best_model_package is None and self.DL_model_package is None:
             self.build_best_model()
-        assert self.best_model_package is not None
 
         other = MultiSampleAnalysis(
             sample_paths=new_sample_paths,
@@ -1510,16 +1463,83 @@ class MultiSampleAnalysis:
         other.load().denoise(**preprocess_kwargs).detect_events(**self.detect_state)
         features = other.extract_features(custom_feature_fns=custom_feature_fns)
 
-        X = features[self.best_model_package["feature_cols"]].fillna(0.0)
-        pred = self.best_model_package["model"].predict(X)
+        # resolve selected model
+        selected_model_name = None
+        selected_model_obj = None
+        selected_feature_cols = None
+        dl_pkg = None
+        if isinstance(model, str):
+            selected_model_name = model
+        elif model is not None:
+            selected_model_obj = model
+
+        if selected_model_name is None and selected_model_obj is None:
+            if self.best_model_package is not None:
+                selected_model_name = str(self.best_model_package["best_model"])
+            elif self.DL_model_package is not None:
+                selected_model_name = str(self.DL_model_package["model_name"])
+
+        if selected_model_name is not None and self.best_model_package is not None:
+            models = self.best_model_package.get("models", {})
+            if selected_model_name in models:
+                selected_model_obj = models[selected_model_name]
+                selected_feature_cols = list(self.best_model_package["feature_cols"])
+
+        if selected_model_name is not None and selected_model_obj is None:
+            if selected_model_name in self.DL_model_packages:
+                dl_pkg = self.DL_model_packages[selected_model_name]
+            elif self.DL_model_package is not None and selected_model_name == self.DL_model_package.get("model_name"):
+                dl_pkg = self.DL_model_package
+
         out = features.copy()
-        out["pred_label"] = pred
-        model = self.best_model_package["model"]
-        if hasattr(model, "predict_proba"):
-            proba = model.predict_proba(X)
-            classes = getattr(model, "classes_", np.arange(proba.shape[1]))
+        if dl_pkg is not None:
+            try:
+                import torch
+            except Exception as exc:  # pragma: no cover
+                raise ImportError("DL prediction requires PyTorch") from exc
+            X_seq, X_feat = other._build_dl_inputs(
+                features,
+                interp_length=int(dl_pkg["interp_length"]),
+                expand=int(dl_pkg["expand"]),
+                scale=dl_pkg["scale"],
+                feature_cols=dl_pkg["feature_cols"],
+            )
+            model_obj = dl_pkg["model"]
+            model_obj.eval()
+            dev = torch.device(dl_pkg.get("device", "cpu"))
+            model_obj.to(dev)
+            with torch.no_grad():
+                x_seq_t = torch.from_numpy(X_seq).unsqueeze(1).to(dev)
+                if X_feat is None:
+                    z = model_obj["extractor"](x_seq_t)
+                    logits = model_obj["head"](z)
+                else:
+                    x_feat_t = torch.from_numpy(X_feat).to(dev)
+                    z = model_obj["extractor"](x_seq_t)
+                    logits = model_obj["head"](torch.cat([z, x_feat_t], dim=1))
+                p = torch.softmax(logits, dim=1).detach().cpu().numpy()
+                pred_idx = np.argmax(p, axis=1)
+            classes = dl_pkg["classes"]
+            suffix = dl_pkg["model_name"]
+            out[f"pred_label_{suffix}"] = [classes[i] for i in pred_idx]
             for i, cls in enumerate(classes):
-                out[f"pred_proba_{cls}"] = proba[:, i]
+                out[f"pred_proba_{cls}_{suffix}"] = p[:, i]
+        else:
+            if selected_model_obj is None:
+                raise ValueError("no valid model found. Train with build_best_model/build_DL_model or pass `model` explicitly.")
+            if selected_feature_cols is None:
+                if self.best_model_package is not None:
+                    selected_feature_cols = list(self.best_model_package["feature_cols"])
+                else:
+                    raise ValueError("feature columns for selected model are unknown")
+            X = features[selected_feature_cols].fillna(0.0)
+            pred = selected_model_obj.predict(X)
+            out["pred_label"] = pred
+            if hasattr(selected_model_obj, "predict_proba"):
+                proba = selected_model_obj.predict_proba(X)
+                classes = getattr(selected_model_obj, "classes_", np.arange(proba.shape[1]))
+                for i, cls in enumerate(classes):
+                    out[f"pred_proba_{cls}"] = proba[:, i]
         other.feature_df = out.copy()
         return other, out
 

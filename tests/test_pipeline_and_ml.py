@@ -192,7 +192,8 @@ def test_object_workflow_end_to_end(tmp_path: Path):
         assert "model_state_dict" in dl_pkg
         assert analysis.filtered_df is not None
         assert any(c.startswith("pred_label_1D-CNN") for c in analysis.filtered_df.columns)
-        other_dl, pred_dl = analysis.classify_new_samples_DL({"U1": new_s}, reader="csv")
+        _ = analysis.pl.plot_fold_loss(model_name="1D-CNN", type="train")
+        other_dl, pred_dl = analysis.classify_new_samples({"U1": new_s}, reader="csv", model="1D-CNN")
         assert other_dl.feature_df is not None
         assert any(c.startswith("pred_label_1D-CNN") for c in pred_dl.columns)
     except ImportError:

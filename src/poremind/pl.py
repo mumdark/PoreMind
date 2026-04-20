@@ -667,6 +667,7 @@ class PlotAccessor:
     def plot_fold_loss(
         self,
         model_name: str = "1D-CNN",
+        type: str = "train",
         width: float = 8.0,
         height: float = 5.0,
     ):
@@ -683,16 +684,22 @@ class PlotAccessor:
             raise ImportError("analysis.pl.plot_fold_loss requires matplotlib") from exc
 
         fig, ax = plt.subplots(figsize=(width, height))
+        mode = type.lower()
+        if mode not in {"train", "val"}:
+            raise ValueError("type must be 'train' or 'val'")
         for i, rec in enumerate(fold_losses, start=1):
-            tr = rec.get("train_loss", [])
-            va = rec.get("val_loss", [])
-            if len(tr):
-                ax.plot(np.arange(1, len(tr) + 1), tr, linewidth=1.0, alpha=0.8, label=f"Fold {i} Train")
-            if len(va):
-                ax.plot(np.arange(1, len(va) + 1), va, linewidth=1.0, alpha=0.8, linestyle="--", label=f"Fold {i} Val")
+            arr = rec.get("train_loss", []) if mode == "train" else rec.get("val_loss", [])
+            if len(arr):
+                v = np.asarray(arr, dtype=float)
+                v_min, v_max = float(np.min(v)), float(np.max(v))
+                if abs(v_max - v_min) < 1e-12:
+                    v_norm = np.zeros_like(v)
+                else:
+                    v_norm = (v - v_min) / (v_max - v_min)
+                ax.plot(np.arange(1, len(v_norm) + 1), v_norm, linewidth=1.0, alpha=0.8, label=f"Fold {i}")
         ax.set_xlabel("Epoch")
-        ax.set_ylabel("Loss")
-        ax.set_title(f"Fold loss curves | {model_name}")
+        ax.set_ylabel("Normalized Loss")
+        ax.set_title(f"Fold {mode} loss curves (normalized) | {model_name}")
         ax.legend(loc="best", fontsize=8, ncol=2)
         plt.tight_layout()
         return ax
