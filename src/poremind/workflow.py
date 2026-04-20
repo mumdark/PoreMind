@@ -13,8 +13,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_score
 from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import GaussianNB
-from scipy.signal import find_peaks
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.neural_network import MLPClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -52,6 +54,8 @@ class MultiSampleAnalysis:
     feature_df: pd.DataFrame | None = None
     filtered_df: pd.DataFrame | None = None
     best_model_package: dict[str, Any] | None = None
+    DL_model_package: dict[str, Any] | None = None
+    DL_model_packages: dict[str, dict[str, Any]] = field(default_factory=dict)
     model_cv_results: dict[str, Any] = field(default_factory=dict)
 
     preprocess_state: dict[str, Any] = field(default_factory=dict)
@@ -666,6 +670,97 @@ class MultiSampleAnalysis:
         self.feature_df = pd.DataFrame(rows)
         return self.feature_df
 
+    def _resolve_dimred_df(self, data: str = "filtered") -> tuple[pd.DataFrame, str]:
+        if data == "filtered":
+            if self.filtered_df is None:
+                self.filter_events()
+            assert self.filtered_df is not None
+            return self.filtered_df.copy(), "filtered"
+        if data == "feature":
+            if self.feature_df is None:
+                self.extract_features()
+            assert self.feature_df is not None
+            return self.feature_df.copy(), "feature"
+        raise ValueError("data must be 'filtered' or 'feature'")
+
+    def _save_dimred_df(self, df: pd.DataFrame, target: str) -> pd.DataFrame:
+        if target == "filtered":
+            self.filtered_df = df
+        elif target == "feature":
+            self.feature_df = df
+        return df
+
+    def do_pca(
+        self,
+        feature_cols: list[str] | None = None,
+        data: str = "filtered",
+        random_state: int = 42,
+    ) -> pd.DataFrame:
+        df, target = self._resolve_dimred_df(data=data)
+        use_cols = list(feature_cols) if feature_cols is not None else select_feature_columns(df)
+        missing = [c for c in use_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"missing feature columns for PCA: {missing}")
+        X = df[use_cols].fillna(0.0).to_numpy(dtype=float)
+        if len(X) < 2:
+            raise ValueError("PCA requires at least 2 rows")
+        pca = PCA(n_components=2, random_state=random_state)
+        emb = pca.fit_transform(X)
+        df["PC1"] = emb[:, 0]
+        df["PC2"] = emb[:, 1]
+        return self._save_dimred_df(df, target)
+
+    def do_tsne(
+        self,
+        feature_cols: list[str] | None = None,
+        data: str = "filtered",
+        random_state: int = 42,
+        perplexity: float = 30.0,
+        n_iter: int = 1000,
+    ) -> pd.DataFrame:
+        df, target = self._resolve_dimred_df(data=data)
+        use_cols = list(feature_cols) if feature_cols is not None else select_feature_columns(df)
+        missing = [c for c in use_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"missing feature columns for TSNE: {missing}")
+        X = df[use_cols].fillna(0.0).to_numpy(dtype=float)
+        n = len(X)
+        if n < 2:
+            raise ValueError("TSNE requires at least 2 rows")
+        perp = max(1.0, min(float(perplexity), float(n - 1)))
+        tsne = TSNE(n_components=2, random_state=random_state, perplexity=perp, max_iter=n_iter, init="pca")
+        emb = tsne.fit_transform(X)
+        df["TSNE1"] = emb[:, 0]
+        df["TSNE2"] = emb[:, 1]
+        return self._save_dimred_df(df, target)
+
+    def do_umap(
+        self,
+        feature_cols: list[str] | None = None,
+        data: str = "filtered",
+        random_state: int = 42,
+        n_neighbors: int = 15,
+        min_dist: float = 0.1,
+    ) -> pd.DataFrame:
+        try:
+            import umap.umap_ as umap  # type: ignore
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("do_umap requires umap-learn. Install with `pip install umap-learn`.") from exc
+
+        df, target = self._resolve_dimred_df(data=data)
+        use_cols = list(feature_cols) if feature_cols is not None else select_feature_columns(df)
+        missing = [c for c in use_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"missing feature columns for UMAP: {missing}")
+        X = df[use_cols].fillna(0.0).to_numpy(dtype=float)
+        if len(X) < 2:
+            raise ValueError("UMAP requires at least 2 rows")
+        reducer = umap.UMAP(n_components=2, random_state=random_state, n_neighbors=n_neighbors, min_dist=min_dist)
+        emb = reducer.fit_transform(X)
+        df["UMAP1"] = emb[:, 0]
+        df["UMAP2"] = emb[:, 1]
+        return self._save_dimred_df(df, target)
+
     @staticmethod
     def _blockade_gmm_mask(
         df: pd.DataFrame,
@@ -689,11 +784,10 @@ class MultiSampleAnalysis:
         if len(data) < 5:
             return rm_index
 
-        # KDE-based peak counting (no seaborn dependency)
+        # KDE curve is kept only for optional visualization.
         grid = np.linspace(np.nanmin(data), np.nanmax(data), 256)
         bw = max(1e-6, np.std(data) * 0.2)
         density = np.sum(np.exp(-0.5 * ((grid[:, None] - data[None, :]) / bw) ** 2), axis=1)
-        peaks, _ = find_peaks(density)
 
         if visualize:
             try:
@@ -702,43 +796,38 @@ class MultiSampleAnalysis:
                 raise ImportError("blockade_gmm visualization requires matplotlib") from exc
             fig, axs = plt.subplots(2, 1, sharex=False, gridspec_kw={"height_ratios": [1, 3]}, figsize=(4, 5))
             axs[0].plot(grid, density)
-            if len(peaks):
-                axs[0].plot(grid[peaks], density[peaks], "ro")
             axs[0].set_ylabel("Density")
             axs[1].scatter(X[blockade_col], np.log10(X[dwell_col].to_numpy(dtype=float) + 1e-12), c=rm_index, alpha=0.5, s=4)
             axs[1].set_xlabel(blockade_col)
             axs[1].set_ylabel(f"log10({dwell_col})")
             plt.tight_layout()
 
-        if len(peaks) > 1:
-            data2 = X.loc[rm_index, blockade_col].to_numpy(dtype=float).reshape(-1, 1)
-            gmm = GaussianMixture(n_components=n_components, random_state=42)
-            gmm.fit(data2)
-            labels = gmm.predict(data2)
+        data2 = X.loc[rm_index, blockade_col].to_numpy(dtype=float).reshape(-1, 1)
+        gmm = GaussianMixture(n_components=n_components, random_state=42)
+        gmm.fit(data2)
+        labels = gmm.predict(data2)
 
-            means = gmm.means_.flatten()
-            covariances = np.sqrt(gmm.covariances_).flatten()
-            valid_indices = np.where((means >= 0) & (means <= 1.2))[0]
-            if len(valid_indices) == 0:
-                valid_indices = np.arange(len(means))
+        means = gmm.means_.flatten()
+        covariances = np.sqrt(gmm.covariances_).flatten()
+        valid_indices = np.where((means >= 0) & (means <= 1.2))[0]
+        if len(valid_indices) == 0:
+            valid_indices = np.arange(len(means))
 
-            if prior_mean is None:
-                if len(valid_indices) > 1:
-                    target = valid_indices[np.argmin(covariances[valid_indices])]
-                else:
-                    target = valid_indices[0]
+        if prior_mean is None:
+            if len(valid_indices) > 1:
+                target = valid_indices[np.argmin(covariances[valid_indices])]
             else:
-                if len(valid_indices) > 1:
-                    target = valid_indices[np.argmin(np.abs(means[valid_indices] - prior_mean))]
-                else:
-                    target = valid_indices[0]
+                target = valid_indices[0]
+        else:
+            if len(valid_indices) > 1:
+                target = valid_indices[np.argmin(np.abs(means[valid_indices] - prior_mean))]
+            else:
+                target = valid_indices[0]
 
-            local = rm_index.copy()
-            local_idx = np.where(rm_index)[0]
-            local[local_idx] = labels == target
-            return local
-
-        return rm_index
+        local = rm_index.copy()
+        local_idx = np.where(rm_index)[0]
+        local[local_idx] = labels == target
+        return local
 
     # Step 4: noise/outlier flagging
     def filter_events(
@@ -746,7 +835,7 @@ class MultiSampleAnalysis:
         method: str = "blockade_gmm",
         parameters: dict[str, Any] | None = None,
         blockage_lim: tuple[float, float] = (0.1, 1.0),
-    ) -> pd.DataFrame:
+    ) -> None:
         if self.feature_df is None:
             self.extract_features()
         assert self.feature_df is not None
@@ -788,8 +877,9 @@ class MultiSampleAnalysis:
         if len(df) == 0:
             df["is_noise"] = []
             df["quality_tag"] = []
+            self.feature_df = df
             self.filtered_df = df.copy()
-            return df
+            return
 
         group_col = "sample_id" if "sample_id" in df.columns else ("trace_id" if "trace_id" in df.columns else None)
         if group_col is None:
@@ -805,10 +895,21 @@ class MultiSampleAnalysis:
                 raise ValueError("rm_index length must match feature dataframe rows")
             rm_series = pd.Series(rm_index, index=df.index)
 
-        df["is_noise"] = False
+        blockade_col = str(cfg.get("blockade_col", "blockade_ratio"))
+        if blockade_col not in df.columns:
+            raise ValueError(f"missing blockade column for blockage_lim filtering: {blockade_col}")
+        lo, hi = float(blockage_lim[0]), float(blockage_lim[1])
+        in_blockage_lim = (df[blockade_col].to_numpy(dtype=float) >= lo) & (df[blockade_col].to_numpy(dtype=float) <= hi)
+        in_lim_series = pd.Series(in_blockage_lim, index=df.index)
+
+        # Hard threshold first: out-of-range events are fixed as noise.
+        df["is_noise"] = ~in_blockage_lim
         for sample_key, idx in group_slices:
-            sub_df = df.loc[idx].copy()
-            sub_rm_index = None if rm_series is None else rm_series.loc[idx].to_numpy(dtype=bool)
+            idx_in = idx[in_lim_series.loc[idx].to_numpy(dtype=bool)]
+            if len(idx_in) == 0:
+                continue
+            sub_df = df.loc[idx_in].copy()
+            sub_rm_index = None if rm_series is None else rm_series.loc[idx_in].to_numpy(dtype=bool)
             sample_prior_mean: float | None
             prior_mean_cfg = cfg.get("prior_mean")
             if isinstance(prior_mean_cfg, dict):
@@ -826,7 +927,7 @@ class MultiSampleAnalysis:
                     visualize=bool(cfg["visualize"]),
                     prior_mean=sample_prior_mean,
                 )
-                df.loc[idx, "is_noise"] = ~valid_mask
+                df.loc[idx_in, "is_noise"] = ~valid_mask
             else:
                 local_feature_cols = list(cfg.get("feature_cols") or select_feature_columns(sub_df))
                 X = sub_df[local_feature_cols].fillna(0.0)
@@ -838,17 +939,12 @@ class MultiSampleAnalysis:
                     pred = detector.fit_predict(X)
                 else:
                     raise ValueError("unsupported outlier method")
-                df.loc[idx, "is_noise"] = pred == -1
+                df.loc[idx_in, "is_noise"] = pred == -1
 
-        blockade_col = str(cfg.get("blockade_col", "blockade_ratio"))
-        if blockade_col not in df.columns:
-            raise ValueError(f"missing blockade column for blockage_lim filtering: {blockade_col}")
-        lo, hi = float(blockage_lim[0]), float(blockage_lim[1])
-        in_blockage_lim = (df[blockade_col].to_numpy(dtype=float) >= lo) & (df[blockade_col].to_numpy(dtype=float) <= hi)
-
-        df["quality_tag"] = np.where((~df["is_noise"]) & in_blockage_lim, "valid", "noise")
+        df["quality_tag"] = np.where(~df["is_noise"], "valid", "noise")
+        self.feature_df = df
         self.filtered_df = df[df["quality_tag"] == "valid"].copy()
-        return df
+        return
 
     # Step 5: model selection (10-fold)
     @staticmethod
@@ -941,12 +1037,13 @@ class MultiSampleAnalysis:
             "test_recall_weighted": wavg("test_recall", test_total, "test_n"),
             "average_mode": cfg["mode"],
         }
-        return {"folds": folds, "aggregate": agg}
+        return {"folds": folds, "aggregate": agg, "labels": all_labels}
 
     def build_best_model(
         self,
         models: dict[str, Any] | None = None,
         label_col: str = "label",
+        feature_cols: list[str] | None = None,
         cv: int = 10,
         scoring: str = "accuracy",
         exclude_noise: bool = True,
@@ -960,7 +1057,11 @@ class MultiSampleAnalysis:
         if label_col not in df.columns:
             raise ValueError("label column missing, provide sample_to_group at init or add labels manually")
 
-        feature_cols = [c for c in select_feature_columns(df) if c not in {"is_noise"}]
+        default_feature_cols = ["duration_s", "blockade_ratio", "segment_std", "segment_skew", "segment_kurt"]
+        feature_cols = list(feature_cols) if feature_cols is not None else default_feature_cols
+        missing = [c for c in feature_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"feature columns missing in dataframe: {missing}")
         X = df[feature_cols].fillna(0.0)
         y = df[label_col]
 
@@ -987,17 +1088,25 @@ class MultiSampleAnalysis:
         }
         score_key = scoring_key_map.get(scoring, "test_accuracy_weighted")
 
-        self.model_cv_results = {}
+        if self.model_cv_results is None:
+            self.model_cv_results = {}
         scores: dict[str, float] = {}
         best_name = None
         best_score = -np.inf
         best_estimator = None
+        trained_models: dict[str, Any] = {}
 
         for name, est in models.items():
             cv_result = self._evaluate_model_cv(est, X, y, cv=cv)
             self.model_cv_results[name] = cv_result
             s = float(cv_result["aggregate"][score_key])
             scores[name] = s
+            try:
+                fitted = clone(est)
+                fitted.fit(X, y)
+                trained_models[name] = fitted
+            except Exception:
+                pass
             if not np.isnan(s) and s > best_score:
                 best_score = s
                 best_name = name
@@ -1006,23 +1115,339 @@ class MultiSampleAnalysis:
         if best_estimator is None or best_name is None:
             raise RuntimeError("all candidate models failed during CV; check labels/class balance")
         best_estimator.fit(X, y)
+        all_feature_df = self.feature_df.copy() if self.feature_df is not None else df.copy()
+        all_X = all_feature_df[feature_cols].fillna(0.0)
+        all_pred = best_estimator.predict(all_X)
+        summary_cols = []
+        for c in ["trace_id", "sample_id", label_col]:
+            if c in all_feature_df.columns:
+                summary_cols.append(c)
+        all_samples_feature_pred = all_feature_df[summary_cols + feature_cols].copy()
+        all_samples_feature_pred["best_model_pred"] = all_pred
         self.best_model_package = {
             "model": best_estimator,
             "feature_cols": feature_cols,
             "scores": scores,
             "best_model": best_name,
+            "models": trained_models,
             "cv_results": self.model_cv_results,
+            "all_samples_feature_pred": all_samples_feature_pred,
             "preprocess_state": self.preprocess_state,
             "detect_state": self.detect_state,
             "feature_state": self.feature_state,
         }
         return self.best_model_package
 
-    # Step 6: reuse current pipeline + best model on new samples
-    def classify_new_samples(self, new_sample_paths: dict[str, str | Path], reader: str | None = None, reader_kwargs: dict[str, Any] | None = None) -> pd.DataFrame:
-        if self.best_model_package is None:
+    @staticmethod
+    def _interp_signal(x: np.ndarray, target_length: int = 500) -> np.ndarray:
+        try:
+            from scipy import interpolate
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("signal interpolation requires scipy") from exc
+        l = len(x)
+        if l <= 1:
+            return np.full(target_length, float(x[0]) if l == 1 else 0.0, dtype=float)
+        xp = np.linspace(0, l - 1, l)
+        f = interpolate.interp1d(xp, x, kind="slinear")
+        x_new = np.linspace(0, l - 1, target_length)
+        y_new = f(x_new)
+        return np.asarray(np.around(y_new, 4), dtype=float)
+
+    @staticmethod
+    def _scale_signal(x: np.ndarray, mode: str | None = "mad") -> np.ndarray:
+        if mode is None or mode == "none":
+            return x
+        if mode == "mad":
+            med = float(np.median(x))
+            mad = float(np.median(np.abs(x - med))) + 1e-12
+            return (x - med) / (1.4826 * mad)
+        if mode == "minmax":
+            lo, hi = float(np.min(x)), float(np.max(x))
+            if hi - lo <= 1e-12:
+                return np.zeros_like(x)
+            return (x - lo) / (hi - lo)
+        raise ValueError("scale mode must be one of: 'mad', 'minmax', 'none'")
+
+    def _build_dl_inputs(
+        self,
+        df: pd.DataFrame,
+        interp_length: int,
+        expand: int,
+        scale: str | None,
+        feature_cols: list[str] | None,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        if "trace_id" not in df.columns or "start_idx" not in df.columns or "end_idx" not in df.columns:
+            raise ValueError("filtered dataframe must include trace_id/start_idx/end_idx for DL training")
+        seqs: list[np.ndarray] = []
+        for _, r in df.iterrows():
+            trace_id = str(r["trace_id"])
+            if trace_id not in self.denoised:
+                raise ValueError(f"trace_id not found in denoised signals: {trace_id}")
+            sig = self.denoised[trace_id]
+            s = max(0, int(r["start_idx"]) - int(expand))
+            e = min(len(sig), int(r["end_idx"]) + int(expand))
+            seg = np.asarray(sig[s:e], dtype=float)
+            seg = self._scale_signal(seg, mode=scale)
+            seqs.append(self._interp_signal(seg, target_length=interp_length))
+        X_seq = np.stack(seqs, axis=0).astype(np.float32)
+        X_feat: np.ndarray | None = None
+        if feature_cols is not None:
+            missing = [c for c in feature_cols if c not in df.columns]
+            if missing:
+                raise ValueError(f"feature columns missing for DL model: {missing}")
+            X_feat = df[feature_cols].fillna(0.0).to_numpy(dtype=np.float32)
+        return X_seq, X_feat
+
+    def build_DL_model(
+        self,
+        model: Any | None = None,
+        model_name: str = "1D-CNN",
+        feature_cols: list[str] | None = None,
+        interp_length: int = 500,
+        expand: int = 50,
+        scale: str | None = "mad",
+        device: str = "cuda",
+        batch_size: int = 64,
+        learning_rate: float = 1e-3,
+        epoch: int = 30,
+        early_stop_patience: int = 5,
+        cv: int = 10,
+        label_col: str = "label",
+    ) -> dict[str, Any]:
+        try:
+            import torch
+            import torch.nn as nn
+            from torch.utils.data import DataLoader, TensorDataset
+        except Exception as exc:  # pragma: no cover
+            raise ImportError("build_DL_model requires PyTorch") from exc
+
+        if self.filtered_df is None:
+            self.filter_events()
+        assert self.filtered_df is not None
+        df = self.filtered_df.copy()
+        if label_col not in df.columns:
+            raise ValueError("label column missing for DL model training")
+        if feature_cols is None:
+            feature_cols = ["duration_s", "blockade_ratio", "segment_std", "segment_skew", "segment_kurt"]
+        if feature_cols is not None and len(feature_cols) == 0:
+            feature_cols = None
+
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+        dev = torch.device(device)
+
+        X_seq, X_feat = self._build_dl_inputs(df, interp_length=interp_length, expand=expand, scale=scale, feature_cols=feature_cols)
+        classes = sorted(pd.unique(df[label_col]))
+        class_to_idx = {c: i for i, c in enumerate(classes)}
+        y_idx = np.asarray([class_to_idx[v] for v in df[label_col].tolist()], dtype=np.int64)
+
+        n_classes = len(classes)
+        if n_classes < 2:
+            raise ValueError("DL model requires at least 2 classes")
+
+        class DefaultConvExtractor(nn.Module):
+            def __init__(self, out_dim: int = 10):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Conv1d(1, 16, kernel_size=7, padding=3),
+                    nn.ReLU(),
+                    nn.MaxPool1d(2),
+                    nn.Conv1d(16, 32, kernel_size=5, padding=2),
+                    nn.ReLU(),
+                    nn.MaxPool1d(2),
+                    nn.AdaptiveAvgPool1d(1),
+                    nn.Flatten(),
+                    nn.Linear(32, out_dim),
+                    nn.ReLU(),
+                )
+
+            def forward(self, x):
+                return self.net(x)
+
+        extractor = model if model is not None else DefaultConvExtractor(out_dim=10)
+        feat_dim = int(X_feat.shape[1]) if X_feat is not None else 0
+        if not hasattr(extractor, "forward"):
+            raise ValueError("model must be a torch module/feature extractor with forward")
+        with torch.no_grad():
+            dummy = torch.zeros(1, 1, interp_length, dtype=torch.float32)
+            conv_dim = int(extractor(dummy).shape[1])
+        head = nn.Linear(conv_dim + feat_dim, n_classes)
+        full_model = nn.ModuleDict({"extractor": extractor, "head": head}).to(dev)
+
+        def _forward(x_seq_t, x_feat_t):
+            z = full_model["extractor"](x_seq_t)
+            if x_feat_t is not None:
+                z = torch.cat([z, x_feat_t], dim=1)
+            return full_model["head"](z)
+
+        criterion = nn.CrossEntropyLoss()
+        splitter = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+        folds: list[dict[str, Any]] = []
+        fold_losses: list[dict[str, list[float]]] = []
+        best_state = None
+        best_fold_score = -np.inf
+
+        for fold_id, (tr_idx, te_idx) in enumerate(splitter.split(X_seq, y_idx), start=1):
+            tr_sub, val_sub = train_test_split(tr_idx, test_size=0.1, random_state=42, stratify=y_idx[tr_idx] if len(np.unique(y_idx[tr_idx])) > 1 else None)
+
+            optimizer = torch.optim.Adam(full_model.parameters(), lr=learning_rate)
+            full_model.train()
+            tr_ds = TensorDataset(torch.from_numpy(X_seq[tr_sub]).unsqueeze(1), torch.from_numpy(y_idx[tr_sub]))
+            val_ds = TensorDataset(torch.from_numpy(X_seq[val_sub]).unsqueeze(1), torch.from_numpy(y_idx[val_sub]))
+            te_ds = TensorDataset(torch.from_numpy(X_seq[te_idx]).unsqueeze(1), torch.from_numpy(y_idx[te_idx]))
+            if X_feat is not None:
+                tr_ds = TensorDataset(torch.from_numpy(X_seq[tr_sub]).unsqueeze(1), torch.from_numpy(X_feat[tr_sub]), torch.from_numpy(y_idx[tr_sub]))
+                val_ds = TensorDataset(torch.from_numpy(X_seq[val_sub]).unsqueeze(1), torch.from_numpy(X_feat[val_sub]), torch.from_numpy(y_idx[val_sub]))
+                te_ds = TensorDataset(torch.from_numpy(X_seq[te_idx]).unsqueeze(1), torch.from_numpy(X_feat[te_idx]), torch.from_numpy(y_idx[te_idx]))
+
+            tr_loader = DataLoader(tr_ds, batch_size=batch_size, shuffle=True)
+            val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+            te_loader = DataLoader(te_ds, batch_size=batch_size, shuffle=False)
+
+            best_val = float("inf")
+            patience = 0
+            best_epoch_state = {k: v.detach().cpu().clone() for k, v in full_model.state_dict().items()}
+            train_loss_hist: list[float] = []
+            val_loss_hist: list[float] = []
+            epoch_iter = range(epoch)
+            try:
+                from tqdm.auto import tqdm  # type: ignore
+
+                epoch_iter = tqdm(epoch_iter, desc=f"build_DL_model:{model_name}:fold{fold_id}", leave=False)
+            except Exception:
+                epoch_iter = range(epoch)
+
+            for _ in epoch_iter:
+                full_model.train()
+                tr_losses = []
+                for batch in tr_loader:
+                    optimizer.zero_grad()
+                    if X_feat is None:
+                        x_seq_b, y_b = batch
+                        logits = _forward(x_seq_b.to(dev), None)
+                    else:
+                        x_seq_b, x_feat_b, y_b = batch
+                        logits = _forward(x_seq_b.to(dev), x_feat_b.to(dev))
+                    loss = criterion(logits, y_b.to(dev))
+                    loss.backward()
+                    optimizer.step()
+                    tr_losses.append(float(loss.detach().cpu()))
+                tr_loss = float(np.mean(tr_losses)) if tr_losses else np.nan
+
+                full_model.eval()
+                with torch.no_grad():
+                    val_losses = []
+                    for batch in val_loader:
+                        if X_feat is None:
+                            x_seq_b, y_b = batch
+                            logits = _forward(x_seq_b.to(dev), None)
+                        else:
+                            x_seq_b, x_feat_b, y_b = batch
+                            logits = _forward(x_seq_b.to(dev), x_feat_b.to(dev))
+                        val_losses.append(float(criterion(logits, y_b.to(dev)).detach().cpu()))
+                val_loss = float(np.mean(val_losses)) if val_losses else np.nan
+                train_loss_hist.append(tr_loss)
+                val_loss_hist.append(val_loss)
+                if val_loss < best_val:
+                    best_val = val_loss
+                    patience = 0
+                    best_epoch_state = {k: v.detach().cpu().clone() for k, v in full_model.state_dict().items()}
+                else:
+                    patience += 1
+                    if patience >= early_stop_patience:
+                        break
+
+            full_model.load_state_dict(best_epoch_state)
+            full_model.eval()
+            y_te = y_idx[te_idx]
+            preds = []
+            probs = []
+            with torch.no_grad():
+                for batch in te_loader:
+                    if X_feat is None:
+                        x_seq_b, _ = batch
+                        logits = _forward(x_seq_b.to(dev), None)
+                    else:
+                        x_seq_b, x_feat_b, _ = batch
+                        logits = _forward(x_seq_b.to(dev), x_feat_b.to(dev))
+                    p = torch.softmax(logits, dim=1)
+                    probs.append(p.detach().cpu().numpy())
+                    preds.append(torch.argmax(p, dim=1).detach().cpu().numpy())
+            pred_idx = np.concatenate(preds)
+            prob_arr = np.concatenate(probs, axis=0)
+            test_acc = float(accuracy_score(y_te, pred_idx))
+            fold = {
+                "fold": fold_id,
+                "train_n": int(len(tr_sub)),
+                "test_n": int(len(te_idx)),
+                "test_accuracy": test_acc,
+                "test_f1": float(f1_score(y_te, pred_idx, average="macro", zero_division=0)),
+                "test_recall": float(recall_score(y_te, pred_idx, average="macro", zero_division=0)),
+                "test_cm": confusion_matrix(y_te, pred_idx, labels=np.arange(n_classes)),
+                "fit_error": None,
+            }
+            folds.append(fold)
+            fold_losses.append({"train_loss": train_loss_hist, "val_loss": val_loss_hist})
+            if test_acc > best_fold_score:
+                best_fold_score = test_acc
+                best_state = {k: v.detach().cpu().clone() for k, v in full_model.state_dict().items()}
+
+        if best_state is None:
+            raise RuntimeError("DL training failed")
+        full_model.load_state_dict(best_state)
+        full_model.eval()
+
+        # full-data prediction and write back to filtered_df
+        with torch.no_grad():
+            x_seq_all = torch.from_numpy(X_seq).unsqueeze(1).to(dev)
+            if X_feat is None:
+                logits_all = _forward(x_seq_all, None)
+            else:
+                x_feat_all = torch.from_numpy(X_feat).to(dev)
+                logits_all = _forward(x_seq_all, x_feat_all)
+            prob_all = torch.softmax(logits_all, dim=1).detach().cpu().numpy()
+            pred_all = np.argmax(prob_all, axis=1)
+
+        suffix = model_name
+        out_df = df.copy()
+        out_df[f"pred_label_{suffix}"] = [classes[i] for i in pred_all]
+        for i, cls in enumerate(classes):
+            out_df[f"pred_proba_{cls}_{suffix}"] = prob_all[:, i]
+        self.filtered_df = out_df
+
+        agg = {
+            "test_accuracy_weighted": float(np.nanmean([f["test_accuracy"] for f in folds])),
+            "test_f1_weighted": float(np.nanmean([f["test_f1"] for f in folds])),
+            "test_recall_weighted": float(np.nanmean([f["test_recall"] for f in folds])),
+        }
+        self.model_cv_results[model_name] = {"folds": folds, "aggregate": agg, "labels": classes, "fold_losses": fold_losses, "type": "dl"}
+        self.DL_model_package = {
+            "model_name": model_name,
+            "model": full_model,
+            "model_state_dict": {k: v.detach().cpu().clone() for k, v in full_model.state_dict().items()},
+            "classes": classes,
+            "class_to_idx": class_to_idx,
+            "feature_cols": feature_cols,
+            "interp_length": interp_length,
+            "expand": expand,
+            "scale": scale,
+            "device": str(dev),
+            "cv_results": self.model_cv_results[model_name],
+        }
+        self.DL_model_packages[model_name] = self.DL_model_package
+        return self.DL_model_package
+
+    # Step 6: reuse current pipeline + trained model on new samples
+    def classify_new_samples(
+        self,
+        new_sample_paths: dict[str, str | Path],
+        reader: str | None = None,
+        reader_kwargs: dict[str, Any] | None = None,
+        custom_feature_fns: dict[str, FeatureFn] | None = None,
+        model: str | Any | None = None,
+    ) -> tuple["MultiSampleAnalysis", pd.DataFrame]:
+        if self.best_model_package is None and self.DL_model_package is None:
             self.build_best_model()
-        assert self.best_model_package is not None
 
         other = MultiSampleAnalysis(
             sample_paths=new_sample_paths,
@@ -1036,17 +1461,87 @@ class MultiSampleAnalysis:
             preprocess_kwargs.update(nested)
 
         other.load().denoise(**preprocess_kwargs).detect_events(**self.detect_state)
-        features = other.extract_features()
+        features = other.extract_features(custom_feature_fns=custom_feature_fns)
 
-        X = features[self.best_model_package["feature_cols"]].fillna(0.0)
-        pred = self.best_model_package["model"].predict(X)
+        # resolve selected model
+        selected_model_name = None
+        selected_model_obj = None
+        selected_feature_cols = None
+        dl_pkg = None
+        if isinstance(model, str):
+            selected_model_name = model
+        elif model is not None:
+            selected_model_obj = model
+
+        if selected_model_name is None and selected_model_obj is None:
+            if self.best_model_package is not None:
+                selected_model_name = str(self.best_model_package["best_model"])
+            elif self.DL_model_package is not None:
+                selected_model_name = str(self.DL_model_package["model_name"])
+
+        if selected_model_name is not None and self.best_model_package is not None:
+            models = self.best_model_package.get("models", {})
+            if selected_model_name in models:
+                selected_model_obj = models[selected_model_name]
+                selected_feature_cols = list(self.best_model_package["feature_cols"])
+
+        if selected_model_name is not None and selected_model_obj is None:
+            if selected_model_name in self.DL_model_packages:
+                dl_pkg = self.DL_model_packages[selected_model_name]
+            elif self.DL_model_package is not None and selected_model_name == self.DL_model_package.get("model_name"):
+                dl_pkg = self.DL_model_package
+
         out = features.copy()
-        out["pred_label"] = pred
-        model = self.best_model_package["model"]
-        if hasattr(model, "predict_proba"):
-            proba = model.predict_proba(X)
-            out["pred_score_max"] = np.max(proba, axis=1)
-        return out
+        if dl_pkg is not None:
+            try:
+                import torch
+            except Exception as exc:  # pragma: no cover
+                raise ImportError("DL prediction requires PyTorch") from exc
+            X_seq, X_feat = other._build_dl_inputs(
+                features,
+                interp_length=int(dl_pkg["interp_length"]),
+                expand=int(dl_pkg["expand"]),
+                scale=dl_pkg["scale"],
+                feature_cols=dl_pkg["feature_cols"],
+            )
+            model_obj = dl_pkg["model"]
+            model_obj.eval()
+            dev = torch.device(dl_pkg.get("device", "cpu"))
+            model_obj.to(dev)
+            with torch.no_grad():
+                x_seq_t = torch.from_numpy(X_seq).unsqueeze(1).to(dev)
+                if X_feat is None:
+                    z = model_obj["extractor"](x_seq_t)
+                    logits = model_obj["head"](z)
+                else:
+                    x_feat_t = torch.from_numpy(X_feat).to(dev)
+                    z = model_obj["extractor"](x_seq_t)
+                    logits = model_obj["head"](torch.cat([z, x_feat_t], dim=1))
+                p = torch.softmax(logits, dim=1).detach().cpu().numpy()
+                pred_idx = np.argmax(p, axis=1)
+            classes = dl_pkg["classes"]
+            suffix = dl_pkg["model_name"]
+            out[f"pred_label_{suffix}"] = [classes[i] for i in pred_idx]
+            for i, cls in enumerate(classes):
+                out[f"pred_proba_{cls}_{suffix}"] = p[:, i]
+        else:
+            if selected_model_obj is None:
+                raise ValueError("no valid model found. Train with build_best_model/build_DL_model or pass `model` explicitly.")
+            if selected_feature_cols is None:
+                if self.best_model_package is not None:
+                    selected_feature_cols = list(self.best_model_package["feature_cols"])
+                else:
+                    raise ValueError("feature columns for selected model are unknown")
+            X = features[selected_feature_cols].fillna(0.0)
+            pred = selected_model_obj.predict(X)
+            out["pred_label"] = pred
+            if hasattr(selected_model_obj, "predict_proba"):
+                proba = selected_model_obj.predict_proba(X)
+                classes = getattr(selected_model_obj, "classes_", np.arange(proba.shape[1]))
+                for i, cls in enumerate(classes):
+                    out[f"pred_proba_{cls}"] = proba[:, i]
+        other.feature_df = out.copy()
+        return other, out
 
 
 def create_analysis_object(
