@@ -7,6 +7,7 @@ One file per function/method.
 - [build_DL_model](./build_DL_model.md)
 - [butterworth_filtfilt](./butterworth_filtfilt.md)
 - [classify_new_samples](./classify_new_samples.md)
+- [classify_new_samples_DL](./classify_new_samples_DL.md)
 - [create_analysis_object](./create_analysis_object.md)
 - [current](./current.md)
 - [denoise](./denoise.md)
