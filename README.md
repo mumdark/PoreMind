@@ -11,6 +11,27 @@ API-oriented single-molecule nanopore analysis toolkit supporting a stepwise mul
 5. Multi-model 10-fold comparison and best-model selection
 6. Event-level classification for new samples
 
+
+## Local Web UI (Gradio Blocks)
+
+A three-layer local wrapper is now available:
+
+- UI layer: `ui/app.py` (single-page multi-tab Gradio Blocks)
+- Application service layer: `ui/controller.py` (`AnalysisController`)
+- Algorithm layer: existing `poremind.workflow.MultiSampleAnalysis` (unchanged)
+
+Run:
+
+```bash
+poremind-ui
+# or
+python -m ui.app
+```
+
+The UI routes all operations through:
+`load_samples` / `run_denoise` / `run_detect` / `extract_features` / `train_model` / `predict_new`,
+with a session snapshot object (`UIAnalysisSession`) for reproducible exports.
+
 ## Documentation
 
 - Method framework (English): `docs/nanopore_single_molecule_framework.md`
