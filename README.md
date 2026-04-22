@@ -1,5 +1,27 @@
 # PoreMind
 
+[English](#english) | [中文](#中文)
+
+## English
+
+API-oriented single-molecule nanopore analysis toolkit supporting a stepwise multi-sample workflow:
+
+1. Signal denoising (multiple methods)
+2. Event detection (multiple methods)
+3. Event feature extraction (built-in + custom)
+4. Abnormal event filtering (`noise` labeling)
+5. Multi-model 10-fold comparison and best-model selection
+6. Event-level classification for new samples
+
+### Documentation
+
+- Framework (English, default): `docs/nanopore_single_molecule_framework.md`
+- 快速上手与接口示例（中文）：见下方“中文”部分与本文示例章节
+
+---
+
+## 中文
+
 面向 API 的单分子纳米孔分析工具，支持多样本逐步骤流程：
 
 1. 电信号降噪（多方法）
@@ -8,6 +30,11 @@
 4. 异常事件过滤（noise 标注）
 5. 多模型 10 折比较并选择最优模型
 6. 新样本逐事件分类
+
+### 文档介绍
+
+- 方法框架（英文，默认）：`docs/nanopore_single_molecule_framework.md`
+- 使用说明（中文）：本文安装与快速用法章节
 
 ## 安装
 
