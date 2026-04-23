@@ -11,6 +11,19 @@ API-oriented single-molecule nanopore analysis toolkit supporting a stepwise mul
 5. Multi-model 10-fold comparison and best-model selection
 6. Event-level classification for new samples
 
+
+## Local Web UI (Gradio Blocks)
+
+Run:
+
+```bash
+poremind-ui
+# or
+python -m ui.app
+```
+
+The Web UI supports interactive preprocessing, event detection tuning, feature analysis, model training, prediction, and reproducible export.
+
 ## Documentation
 
 - Method framework (English): `docs/nanopore_single_molecule_framework.md`

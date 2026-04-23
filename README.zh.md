@@ -11,6 +11,19 @@
 5. 多模型 10 折比较并选择最优模型
 6. 新样本逐事件分类
 
+
+## 本地 Web UI（Gradio Blocks）
+
+启动方式：
+
+```bash
+poremind-ui
+# 或
+python -m ui.app
+```
+
+Web UI 提供预处理、事件检测调参、特征分析、模型训练、预测与复现导出等完整交互流程。
+
 ## 文档
 
 - 方法框架（英文）：`docs/nanopore_single_molecule_framework.md`

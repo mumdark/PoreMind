@@ -15,7 +15,12 @@ dependencies = [
   "matplotlib",
   "ruptures",
   "hmmlearn",
+  "gradio",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+
+[project.scripts]
+poremind-ui = "ui.app:main"
