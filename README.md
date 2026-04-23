@@ -25,6 +25,12 @@ python -m ui.app
 The Web UI supports interactive preprocessing, event detection tuning, feature analysis, model training, prediction, and reproducible export.
 
 ## Documentation
+[Documentation](https://www.baidu.com](https://mumdark.github.io/PoreMind/))
+
+# Quick start
+
+
+## Documentation
 
 - Method framework (English): `docs/nanopore_single_molecule_framework.md`
 - Chinese guide: `README.zh.md`
