@@ -131,7 +131,7 @@ Full step-by-step notebook: `notebooks/step_by_step_analysis.ipynb`
 
 ## Citation & License
 
-- If you use this tool in your research, publication, or other public work, please cite this repository and specify the exact version or commit used.
+- If you use this tool in your research, publication, or other public work, we welcome citation of this repository together with the exact version or commit used.
 - Commercial use is not permitted without prior written permission from the copyright holder.
 
 ## contact
