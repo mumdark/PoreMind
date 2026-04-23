@@ -1,0 +1,30 @@
+site_name: PoreMind Docs
+site_description: Documentation for the PoreMind single-molecule nanopore analysis toolkit
+
+# Keep docs in the existing top-level docs/ directory
+docs_dir: docs
+
+theme:
+  name: material
+
+plugins:
+  - search
+  - mkdocs-jupyter:
+      execute: false
+      include_source: true
+      ignore_h1_titles: true
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - admonition
+  - codehilite
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Quick Start (Notebook): quickstart.ipynb
+  - Method Framework: nanopore_single_molecule_framework.md
+  - Function Reference:
+      - Overview: functions/index.md
