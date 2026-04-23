@@ -11,8 +11,17 @@ API-oriented single-molecule nanopore analysis toolkit supporting a stepwise mul
 5. Multi-model 10-fold comparison and best-model selection
 6. Event-level classification for new samples
 
+## Installation
 
-## Local Web UI (Gradio Blocks)
+```bash
+conda create -n poremind python=3.10 -y
+conda activate poremind
+pip install -e . # -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+pip install pyabf
+```
+
+
+## Local Web UI
 
 Run:
 
@@ -27,24 +36,8 @@ The Web UI supports interactive preprocessing, event detection tuning, feature a
 ## Documentation
 [Documentation](https://www.baidu.com](https://mumdark.github.io/PoreMind/))
 
-# Quick start
 
-
-## Documentation
-
-- Method framework (English): `docs/nanopore_single_molecule_framework.md`
-- Chinese guide: `README.zh.md`
-
-## Installation
-
-```bash
-conda create -n poremind python=3.10 -y
-conda activate poremind
-pip install -e . # -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
-pip install pyabf
-```
-
-## Quick Usage (ABF Input)
+## Quick start (API)
 
 ```python
 from poremind import create_analysis_object
