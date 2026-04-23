@@ -34,7 +34,7 @@ python -m ui.app
 The Web UI supports interactive preprocessing, event detection tuning, feature analysis, model training, prediction, and reproducible export.
 
 ## Documentation
-[Documentation](https://www.baidu.com](https://mumdark.github.io/PoreMind/))
+[Documentation](https://mumdark.github.io/PoreMind/)
 
 
 ## Quick start (API)
