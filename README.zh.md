@@ -24,11 +24,6 @@ python -m ui.app
 
 Web UI 提供预处理、事件检测调参、特征分析、模型训练、预测与复现导出等完整交互流程。
 
-## 使用文档
-[教程](https://www.baidu.com](https://mumdark.github.io/PoreMind/))
-
-# 快速开始
-
 
 ## 安装
 
@@ -39,7 +34,11 @@ pip install -e . # -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host py
 pip install pyabf
 ```
 
-## 快速用法（ABF 输入）
+## 使用文档
+[教程](https://www.baidu.com](https://mumdark.github.io/PoreMind/))
+
+
+## 快速用法（API调用）
 
 ```python
 from poremind import create_analysis_object
