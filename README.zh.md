@@ -12,6 +12,16 @@
 6. 新样本逐事件分类
 
 
+## 安装
+
+```bash
+conda create -n poremind python=3.10 -y
+conda activate poremind
+pip install -e . # -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+pip install pyabf
+```
+
+
 ## 本地 Web UI（Gradio Blocks）
 
 启动方式：
@@ -23,16 +33,6 @@ python -m ui.app
 ```
 
 Web UI 提供预处理、事件检测调参、特征分析、模型训练、预测与复现导出等完整交互流程。
-
-
-## 安装
-
-```bash
-conda create -n poremind python=3.10 -y
-conda activate poremind
-pip install -e . # -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
-pip install pyabf
-```
 
 ## 使用文档
 [教程](https://www.baidu.com](https://mumdark.github.io/PoreMind/))
