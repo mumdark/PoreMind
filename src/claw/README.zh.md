@@ -1,4 +1,4 @@
-# OpenClaw 技能包（行为规范）
+# OpenClaw 技能包
 
 [English](./README.md) | [中文](./README.zh.md)
 
@@ -11,7 +11,7 @@
 
 ## 解决的问题
 
-该技能文档明确了 OpenClaw 如何：
+该技能文档明确了 OpenClaw 如何使用本工具：
 
 1. 理解并执行完整 PoreMind 分析流程；
 2. 分步骤解释函数作用与参数影响；
