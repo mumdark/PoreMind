@@ -10,6 +10,7 @@ PoreMind is an API-oriented toolkit for single-molecule nanopore analysis, inclu
 - **Quick Start**: Step-by-step analysis flow aligned with `notebooks/step_by_step_analysis.ipynb`.
 - **Method Framework**: Conceptual pipeline overview.
 - **Function Reference**: One file per function/method.
+- **Citation & License**: How to cite and MIT usage notes.
 
 ## Source Links
 
