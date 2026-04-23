@@ -137,4 +137,4 @@ Full step-by-step notebook: `notebooks/step_by_step_analysis.ipynb`
 - If you require non-commercial-only terms, use a different license policy because MIT does not restrict commercial usage.
 
 ## contact
-[mudark](mailto:ningyan1212@gmail.com)
+[mudark: Email](mailto:ningyan1212@gmail.com)
