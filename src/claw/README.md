@@ -1,4 +1,4 @@
-# OpenClaw Skill Pack (Behavior Spec)
+# OpenClaw Skill Pack
 
 [English](./README.md) | [中文](./README.zh.md)
 
