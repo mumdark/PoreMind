@@ -14,12 +14,6 @@
 
 ## 本地 Web UI（Gradio Blocks）
 
-新增三层隔离的本地交互包装：
-
-- UI 层：`ui/app.py`（单页多标签 Gradio Blocks）
-- 应用服务层：`ui/controller.py`（`AnalysisController`）
-- 算法层：`poremind.workflow.MultiSampleAnalysis`（保持不变）
-
 启动方式：
 
 ```bash
@@ -28,8 +22,7 @@ poremind-ui
 python -m ui.app
 ```
 
-UI 统一通过 `load_samples` / `run_denoise` / `run_detect` / `extract_features` / `train_model` / `predict_new` 访问能力，
-并使用 `UIAnalysisSession` 保存参数快照与会话状态，支持导出复现。
+Web UI 提供预处理、事件检测调参、特征分析、模型训练、预测与复现导出等完整交互流程。
 
 ## 文档
 

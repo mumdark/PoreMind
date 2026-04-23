@@ -70,6 +70,19 @@ def test_controller_end_to_end(tmp_path):
     exported = ctl.export_tables(tmp_path / "exports")
     assert "feature_df" in exported
     params_json = ctl.export_params_json(tmp_path / "exports" / "params_snapshot.json")
+
+    # plotting + event tables
+    simple_table = ctl.simple_events_df("sample_a")
+    event_table = ctl.events_df("sample_a")
+    assert isinstance(simple_table, pd.DataFrame)
+    assert isinstance(event_table, pd.DataFrame)
+
+    fig_current = ctl.plot_current(sample_id="sample_a", start_ms=0, end_ms=200)
+    fig_simple = ctl.plot_event_current_simple(sample_id="sample_a", start_event=1, end_event=2)
+    fig_detect = ctl.plot_event_current(sample_id="sample_a", start_event=1, end_event=2)
+    assert fig_current is not None
+    assert fig_simple is not None
+    assert fig_detect is not None
     script = ctl.export_analysis_script(tmp_path / "exports" / "reproduce_analysis.py")
     assert params_json.endswith("params_snapshot.json")
     assert script.endswith("reproduce_analysis.py")

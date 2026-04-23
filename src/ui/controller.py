@@ -58,6 +58,7 @@ class AnalysisController:
                 "n_samples": int(len(sample_paths)),
                 "n_traces": int(len(analysis.traces)),
                 "reader": reader,
+                "trace_ids": list(analysis.traces.keys()),
             },
         }
 
@@ -199,20 +200,157 @@ class AnalysisController:
         }
         return self.session.outputs["model"]
 
+    def train_dl_model(
+        self,
+        model_name: str = "1D-CNN",
+        feature_cols: list[str] | None = None,
+        interp_length: int = 500,
+        expand: int = 50,
+        scale: str | None = "mad",
+        device: str = "cpu",
+        batch_size: int = 64,
+        learning_rate: float = 1e-3,
+        epoch: int = 10,
+        early_stop_patience: int = 5,
+        cv: int = 5,
+        label_col: str = "label",
+    ) -> dict[str, Any]:
+        analysis = self._require_analysis()
+        pkg = analysis.build_DL_model(
+            model_name=model_name,
+            feature_cols=feature_cols,
+            interp_length=interp_length,
+            expand=expand,
+            scale=scale,
+            device=device,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            epoch=epoch,
+            early_stop_patience=early_stop_patience,
+            cv=cv,
+            label_col=label_col,
+        )
+        self.session.outputs["dl_model"] = {
+            "model_name": pkg.get("model_name", model_name),
+            "classes": pkg.get("classes", []),
+            "feature_cols": pkg.get("feature_cols"),
+        }
+        return self.session.outputs["dl_model"]
+
     def predict_new(
         self,
         new_sample_paths: dict[str, str],
         reader: str | None = None,
         reader_kwargs: dict[str, Any] | None = None,
+        model: str | None = None,
     ) -> pd.DataFrame:
         analysis = self._require_analysis()
         _, pred = analysis.classify_new_samples(
             new_sample_paths=new_sample_paths,
             reader=reader,
             reader_kwargs=reader_kwargs,
+            model=model,
         )
         self.session.outputs["pred_df"] = pred
         return pred
+
+    def simple_events_df(self, sample_id: str | None = None) -> pd.DataFrame:
+        analysis = self._require_analysis()
+        if not analysis.simple_events:
+            return pd.DataFrame()
+        sid = sample_id or next(iter(analysis.simple_events.keys()))
+        rows = [self._event_row(e, sid, i) for i, e in enumerate(analysis.simple_events.get(sid, []))]
+        return pd.DataFrame(rows)
+
+    def events_df(self, sample_id: str | None = None) -> pd.DataFrame:
+        analysis = self._require_analysis()
+        if not analysis.events:
+            return pd.DataFrame()
+        sid = sample_id or next(iter(analysis.events.keys()))
+        rows = [self._event_row(e, sid, i) for i, e in enumerate(analysis.events.get(sid, []))]
+        return pd.DataFrame(rows)
+
+    def plot_current(self, sample_id: str | None = None, current: str = "denoise", start_ms: float = 0.0, end_ms: float = 1.0):
+        analysis = self._require_analysis()
+        ax = analysis.pl.current(sample_id=sample_id, current=current, start_ms=start_ms, end_ms=end_ms)
+        return ax.figure
+
+    def plot_event_current_simple(self, sample_id: str | None = None, current: str = "denoise", start_event: int = 1, end_event: int = 5):
+        analysis = self._require_analysis()
+        ax = analysis.pl.event_current_simple(sample_id=sample_id, current=current, start_event=start_event, end_event=end_event)
+        return ax.figure
+
+    def plot_event_current(self, sample_id: str | None = None, current: str = "denoise", start_event: int = 1, end_event: int = 5):
+        analysis = self._require_analysis()
+        ax = analysis.pl.event_current(sample_id=sample_id, current=current, start_event=start_event, end_event=end_event)
+        return ax.figure
+
+    def plot_2d(self, **kwargs: Any):
+        analysis = self._require_analysis()
+        ax = analysis.pl.plot_2d(**kwargs)
+        return ax.figure
+
+    def plot_3d(self, **kwargs: Any):
+        analysis = self._require_analysis()
+        ax = analysis.pl.plot_3d(**kwargs)
+        return ax.figure
+
+    def box_significance(self, **kwargs: Any):
+        analysis = self._require_analysis()
+        ax = analysis.pl.box_significance(**kwargs)
+        return ax.figure
+
+    def plot_model_cm(self, model_name: str, split: str = "test"):
+        analysis = self._require_analysis()
+        ax = analysis.pl.model_cm(model_name=model_name, split=split)
+        return ax.figure
+
+    def plot_model_metric_bar(self, metric: str = "accuracy", split: str = "test"):
+        analysis = self._require_analysis()
+        ax = analysis.pl.model_metric_bar(metric=metric, split=split)
+        return ax.figure
+
+    def plot_fold_loss(self, model_name: str = "1D-CNN", type: str = "train"):
+        analysis = self._require_analysis()
+        ax = analysis.pl.plot_fold_loss(model_name=model_name, type=type)
+        return ax.figure
+
+    def plot_event_current_label(
+        self,
+        sample_id: str | None = None,
+        current: str = "denoise",
+        start_event: int = 1,
+        end_event: int = 5,
+        label_col: str = "pred_label",
+    ):
+        analysis = self._require_analysis()
+        ax = analysis.pl.event_current_label(
+            sample_id=sample_id,
+            current=current,
+            start_event=start_event,
+            end_event=end_event,
+            lable_col=label_col,
+        )
+        return ax.figure
+
+    def plot_stacked_bar(self, group_col: str = "sample_id", value_col: str = "pred_label", data: str = "filtered"):
+        analysis = self._require_analysis()
+        ax = analysis.pl.stacked_bar(group_col=group_col, value_col=value_col, data=data)
+        return ax.figure
+
+    def model_prediction_table(self) -> pd.DataFrame:
+        analysis = self._require_analysis()
+        if analysis.best_model_package is None:
+            return pd.DataFrame()
+        return analysis.best_model_package.get("all_samples_feature_pred", pd.DataFrame()).copy()
+
+    def feature_table(self) -> pd.DataFrame:
+        analysis = self._require_analysis()
+        return analysis.feature_df.copy() if analysis.feature_df is not None else pd.DataFrame()
+
+    def filtered_table(self) -> pd.DataFrame:
+        analysis = self._require_analysis()
+        return analysis.filtered_df.copy() if analysis.filtered_df is not None else pd.DataFrame()
 
     def export_tables(self, output_dir: str | Path) -> dict[str, str]:
         out_dir = Path(output_dir)
@@ -272,10 +410,27 @@ analysis.build_best_model(**{self.session.model_params!r})
             return select_feature_columns(analysis.feature_df)
         return []
 
+    def trace_ids(self) -> list[str]:
+        analysis = self._require_analysis()
+        return list(analysis.traces.keys())
+
     def _require_analysis(self) -> MultiSampleAnalysis:
         if self.session.analysis is None:
             raise ValueError("Please load samples first.")
         return self.session.analysis
+
+    @staticmethod
+    def _event_row(event: Any, sample_id: str, event_id: int) -> dict[str, Any]:
+        return {
+            "sample_id": sample_id,
+            "event_id": int(event_id),
+            "start_idx": int(event.start_idx),
+            "end_idx": int(event.end_idx),
+            "baseline_local": float(event.baseline_local),
+            "delta_i": float(event.delta_i),
+            "dwell_time_s": float(event.dwell_time_s),
+            "snr": float(event.snr),
+        }
 
     def _reader(self) -> str:
         analysis = self._require_analysis()
