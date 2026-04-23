@@ -35,8 +35,7 @@ python -m ui.app
 Web UI 提供预处理、事件检测调参、特征分析、模型训练、预测与复现导出等完整交互流程。
 
 ## 使用文档
-[教程](https://www.baidu.com](https://mumdark.github.io/PoreMind/))
-
+[教程](https://mumdark.github.io/PoreMind/)
 
 ## 快速用法（API调用）
 
