@@ -135,17 +135,26 @@ class AnalysisController:
         self.session.outputs["detect"] = out
         return out
 
-    def extract_features(self, max_event_per_sample: int | None = None) -> pd.DataFrame:
+    def extract_features(
+        self,
+        max_event_per_sample: int | None = None,
+        custom_feature_fns: dict[str, Any] | None = None,
+    ) -> pd.DataFrame:
         analysis = self._require_analysis()
-        df = analysis.extract_features(max_event_per_sample=max_event_per_sample)
-        self.session.feature_params = {"max_event_per_sample": max_event_per_sample}
+        df = analysis.extract_features(max_event_per_sample=max_event_per_sample, custom_feature_fns=custom_feature_fns)
+        self.session.feature_params = {"max_event_per_sample": max_event_per_sample, "custom_feature_fns": list((custom_feature_fns or {}).keys())}
         self.session.outputs["feature_df"] = df
         return df
 
-    def filter_events(self, method: str = "blockade_gmm", parameters: dict[str, Any] | None = None) -> pd.DataFrame:
+    def filter_events(
+        self,
+        method: str = "blockade_gmm",
+        parameters: dict[str, Any] | None = None,
+        blockage_lim: tuple[float, float] = (0.1, 1.0),
+    ) -> pd.DataFrame:
         analysis = self._require_analysis()
-        analysis.filter_events(method=method, parameters=parameters)
-        self.session.filter_params = {"method": method, "parameters": parameters or {}}
+        analysis.filter_events(method=method, parameters=parameters, blockage_lim=blockage_lim)
+        self.session.filter_params = {"method": method, "parameters": parameters or {}, "blockage_lim": blockage_lim}
         assert analysis.filtered_df is not None
         self.session.outputs["filtered_df"] = analysis.filtered_df
         return analysis.filtered_df
