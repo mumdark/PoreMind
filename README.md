@@ -132,9 +132,8 @@ Full step-by-step notebook: `notebooks/step_by_step_analysis.ipynb`
 
 ## Citation & License
 
-- Please cite this repository and the exact version/commit in publications.
-- License intent: MIT-style permissive use (including commercial and non-commercial) with attribution.
-- If you require non-commercial-only terms, use a different license policy because MIT does not restrict commercial usage.
+- If you use this tool in your research, publication, or other public work, please cite this repository and specify the exact version or commit used.
+- Commercial use is not permitted without prior written permission from the copyright holder.
 
 ## contact
 [mudark: Email](mailto:ningyan1212@gmail.com)
