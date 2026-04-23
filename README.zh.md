@@ -24,10 +24,11 @@ python -m ui.app
 
 Web UI 提供预处理、事件检测调参、特征分析、模型训练、预测与复现导出等完整交互流程。
 
-## 文档
+## 使用文档
+[教程]([https://www.baidu.com](https://mumdark.github.io/PoreMind/))
 
-- 方法框架（英文）：`docs/nanopore_single_molecule_framework.md`
-- 中文说明：`README.zh.md`
+# 快速开始
+
 
 ## 安装
 
