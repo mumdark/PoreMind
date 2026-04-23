@@ -22,7 +22,7 @@ pip install pyabf
 ```
 
 
-## 本地 Web UI（Gradio Blocks）
+## 本地 Web UI
 
 启动方式：
 
